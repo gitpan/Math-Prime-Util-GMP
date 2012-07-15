@@ -1,0 +1,45 @@
+{
+   "abstract" : "Utilities related to prime numbers, using GMP",
+   "author" : [
+      "Dana A Jacobsen <dana@acm.org>"
+   ],
+   "dynamic_config" : 1,
+   "generated_by" : "ExtUtils::MakeMaker version 6.6302, CPAN::Meta::Converter version 2.120630",
+   "license" : [
+      "perl_5"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "Math-Prime-Util-GMP",
+   "no_index" : {
+      "directory" : [
+         "t",
+         "inc"
+      ]
+   },
+   "prereqs" : {
+      "build" : {
+         "requires" : {
+            "Test::More" : "0.45"
+         }
+      },
+      "configure" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "0"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "Carp" : "0",
+            "Exporter" : "5.562",
+            "XSLoader" : "0.01",
+            "base" : "0",
+            "perl" : "5.006002"
+         }
+      }
+   },
+   "release_status" : "stable",
+   "version" : "0.01"
+}
