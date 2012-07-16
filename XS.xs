@@ -156,8 +156,6 @@ SV *
 next_prime(IN char* strn)
   PREINIT:
     mpz_t n;
-    int nsize;
-    char* str;
   PPCODE:
     validate_string_number("next_prime (n)", strn);
     mpz_init_set_str(n, strn, 10);
@@ -171,8 +169,6 @@ SV *
 prev_prime(IN char* strn)
   PREINIT:
     mpz_t n;
-    int nsize;
-    char* str;
   PPCODE:
     validate_string_number("prev_prime (n)", strn);
     mpz_init_set_str(n, strn, 10);
@@ -183,10 +179,20 @@ prev_prime(IN char* strn)
     mpz_clear(n);
 
 
+SV *
+_lcm_of_consecutive_integers(IN UV B)
+  PREINIT:
+    mpz_t m;
+  PPCODE:
+    mpz_init(m);
+    _GMP_lcm_of_consecutive_integers(B, m);
+    XPUSH_MPZ(m);
+    mpz_clear(m);
+
 SV*
 _GMP_trial_primes(IN char* strlow, IN char* strhigh)
   PREINIT:
-    mpz_t low, high, curprime;
+    mpz_t low, high;
     AV* av = newAV();
   CODE:
     validate_string_number("trial_primes (low)", strlow);
@@ -283,9 +289,9 @@ pminus1_factor(IN char* strn, IN UV smoothness = 1000000, IN UV B2 = 0)
     mpz_t n;
   PPCODE:
     SIMPLE_FACTOR_START("pminus1_factor");
-    if (B2 == 0) {
-      /* Without a B2, increment up */
+    if (B2 == 0) { /* Without a B2, increment up */
       UV B = 5;
+      success = 0;
       while (!success) {
         success = _GMP_pminus1_factor(n, f, B, 20*B);
         if (B == smoothness) break;
@@ -296,7 +302,7 @@ pminus1_factor(IN char* strn, IN UV smoothness = 1000000, IN UV B2 = 0)
       /* Given a B1 and B2, do just what they asked. */
       success = _GMP_pminus1_factor(n, f, smoothness, B2);
     }
-    //success = _GMP_pminus1_factor2(n, f, smoothness);
+    /* success = _GMP_pminus1_factor2(n, f, smoothness); */
     SIMPLE_FACTOR_END;
 
 void
@@ -356,7 +362,7 @@ _GMP_factor(IN char* strn)
            * looking for small factors: prho and pbrent are ~ O(f^1/2) where
            * f is the smallest factor.  SQUFOF is O(N^1/4), so arguable not
            * any better.
-           * 
+           *
            * On my small 32-bit workstation, these will factor a 778-digit
            * number consisting of 101 8-digit factors in under 10 seconds.
            * A 246-digit number with 21 12-digit factors took a little under
@@ -414,7 +420,7 @@ _GMP_factor(IN char* strn)
           if (!success)  success = _GMP_pbrent_factor(n, f, 2, 512*1024*1024);
           if (success&&o) {gmp_printf("pbrent (2,512M) found factor %Zd\n", f);o=0;}
 
-          if (!success) gmp_printf("starting squfof on %Zd\n", n);
+          if (!success && _GMP_get_verbose()) gmp_printf("starting squfof on %Zd\n", n);
           if (!success)  success = _GMP_squfof_factor(n, f, 256*1024*1024);
           if (success&&o) {gmp_printf("squfof found factor %Zd\n", f);o=0;}
 
