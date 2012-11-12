@@ -21,6 +21,7 @@ plan tests => 0 + 6
                 + 8
                 + 6
                 + 10
+                + 1
                 + 0;
 
 # Some of these tests were inspired by Math::Primality's tests
@@ -141,3 +142,5 @@ map { ok(!is_prime($_), "Large composite $_ is not prime" ) }
      564132928021909221014087501701
      1543267864443420616877677640751301
     /;
+
+is(is_prime('340282366920938463463374607431768211507'), 2, "is_prime(2**128+51) = 2");

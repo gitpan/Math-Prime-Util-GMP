@@ -74,21 +74,29 @@ _GMP_miller_rabin(IN char* strn, IN char* strbase)
   OUTPUT:
     RETVAL
 
+#define PRIMALITY_START(name, small_retval) \
+    /* Negative numbers return 0 */ \
+    if ((strn != 0) && (strn[0] == '-') ) \
+      XSRETURN_IV(0); \
+    validate_string_number(name " (n)", strn); \
+    if (strn[1] == 0) { \
+      int q_is_prime = 0; \
+      switch (strn[0]) { \
+        case '2': case '3': case '5': case '7': q_is_prime = small_retval; \
+                                                break; \
+      } \
+      XSRETURN_IV(q_is_prime); \
+    } \
+    mpz_init_set_str(n, strn, 10);
 
 int
 is_strong_lucas_pseudoprime(IN char* strn)
   PREINIT:
     mpz_t n;
   CODE:
-    validate_string_number("is_strong_lucas_pseudoprime (n)", strn);
-    if (strn[1] == 0) {
-      int q_is_prime = 0;
-      switch (strn[0]) {
-        case '2': case '3': case '5': case '7': q_is_prime = 1; break;
-      }
-      XSRETURN_IV(q_is_prime);
-    }
-    mpz_init_set_str(n, strn, 10);
+    if ((strn != 0) && (strn[0] == '-') )
+      croak("Parameter '%s' must be a positive integer\n", strn);
+    PRIMALITY_START("is_strong_lucas_pseudoprime", 1);
     RETVAL = _GMP_is_strong_lucas_pseudoprime(n);
     mpz_clear(n);
   OUTPUT:
@@ -99,17 +107,7 @@ is_prob_prime(IN char* strn)
   PREINIT:
     mpz_t n;
   CODE:
-    if ((strn != 0) && (strn[0] == '-') )  /* Negative numbers return 0 */
-      XSRETURN_IV(0);
-    validate_string_number("is_prob_prime (n)", strn);
-    if (strn[1] == 0) {
-      int q_is_prime = 0;
-      switch (strn[0]) {
-        case '2': case '3': case '5': case '7': q_is_prime = 2; break;
-      }
-      XSRETURN_IV(q_is_prime);
-    }
-    mpz_init_set_str(n, strn, 10);
+    PRIMALITY_START("is_prob_prime", 2);
     RETVAL = _GMP_is_prob_prime(n);
     mpz_clear(n);
   OUTPUT:
@@ -120,18 +118,19 @@ is_prime(IN char* strn)
   PREINIT:
     mpz_t n;
   CODE:
-    if ((strn != 0) && (strn[0] == '-') )  /* Negative numbers return 0 */
-      XSRETURN_IV(0);
-    validate_string_number("is_prime (n)", strn);
-    if (strn[1] == 0) {
-      int q_is_prime = 0;
-      switch (strn[0]) {
-        case '2': case '3': case '5': case '7': q_is_prime = 2; break;
-      }
-      XSRETURN_IV(q_is_prime);
-    }
-    mpz_init_set_str(n, strn, 10);
+    PRIMALITY_START("is_prime", 2);
     RETVAL = _GMP_is_prime(n);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
+int
+is_provable_prime(IN char* strn)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    PRIMALITY_START("is_provable_prime", 2);
+    RETVAL = _GMP_is_provable_prime(n);
     mpz_clear(n);
   OUTPUT:
     RETVAL
@@ -180,7 +179,36 @@ prev_prime(IN char* strn)
 
 
 SV *
-_lcm_of_consecutive_integers(IN UV B)
+prime_count(IN char* strlow, IN char* strhigh)
+  PREINIT:
+    mpz_t low, high, count;
+  PPCODE:
+    validate_string_number("prime_count (low)", strlow);
+    validate_string_number("prime_count (high)", strhigh);
+    mpz_init_set_str(low, strlow, 10);
+    mpz_init_set_str(high, strhigh, 10);
+    mpz_init_set_ui(count, 0);
+
+    if (mpz_cmp(low, high) <= 0) {
+      mpz_t curprime;
+      mpz_init_set(curprime, low);
+      if (mpz_cmp_ui(curprime, 2) >= 0)
+        mpz_sub_ui(curprime, curprime, 1);  /* Make sure low gets included */
+      _GMP_next_prime(curprime);
+      while (mpz_cmp(curprime, high) <= 0) {
+        mpz_add_ui(count, count, 1);
+        _GMP_next_prime(curprime);
+      }
+      mpz_clear(curprime);
+    }
+    XPUSH_MPZ(count);
+    mpz_clear(count);
+    mpz_clear(high);
+    mpz_clear(low);
+
+
+SV *
+consecutive_integer_lcm(IN UV B)
   PREINIT:
     mpz_t m;
   PPCODE:
@@ -188,6 +216,29 @@ _lcm_of_consecutive_integers(IN UV B)
     _GMP_lcm_of_consecutive_integers(B, m);
     XPUSH_MPZ(m);
     mpz_clear(m);
+
+SV *
+primorial(IN char* strn)
+  PREINIT:
+    mpz_t prim, n;
+  PPCODE:
+    validate_string_number("primorial (n)", strn);
+    mpz_init_set_str(n, strn, 10);
+    mpz_init(prim);
+    _GMP_primorial(prim, n);
+    XPUSH_MPZ(prim);
+    mpz_clear(n);
+    mpz_clear(prim);
+
+SV *
+pn_primorial(IN UV n)
+  PREINIT:
+    mpz_t prim;
+  PPCODE:
+    mpz_init(prim);
+    _GMP_pn_primorial(prim, n);
+    XPUSH_MPZ(prim);
+    mpz_clear(prim);
 
 SV*
 _GMP_trial_primes(IN char* strlow, IN char* strhigh)
@@ -245,7 +296,7 @@ _GMP_trial_primes(IN char* strlow, IN char* strhigh)
       /* while (mpz_divisible_ui_p(n, 3)) { mpz_divexact_ui(n, n, 3); XPUSHs(sv_2mortal(newSVuv( 3 ))); } */ \
       /* while (mpz_divisible_ui_p(n, 5)) { mpz_divexact_ui(n, n, 5); XPUSHs(sv_2mortal(newSVuv( 5 ))); } */ \
       if (mpz_cmp_ui(n, 1) == 0) { /* done */ } \
-      else if (_GMP_is_prime(n)) { XPUSH_MPZ(n); } \
+      else if (_GMP_is_prob_prime(n)) { XPUSH_MPZ(n); } \
       else { \
         mpz_t f; \
         int success; \
@@ -266,6 +317,18 @@ _GMP_trial_primes(IN char* strlow, IN char* strhigh)
 
 
 void
+trial_factor(IN char* strn, IN UV maxn = 0)
+  PREINIT:
+    mpz_t n;
+    UV factor;
+  PPCODE:
+    SIMPLE_FACTOR_START("trial_factor");
+    factor = _GMP_trial_factor(n, 2, (maxn == 0) ? 2147483647 : maxn);
+    mpz_set_ui(f, factor);
+    success = (factor != 0);
+    SIMPLE_FACTOR_END;
+
+void
 prho_factor(IN char* strn, IN UV maxrounds = 64*1024*1024)
   PREINIT:
     mpz_t n;
@@ -284,25 +347,12 @@ pbrent_factor(IN char* strn, IN UV maxrounds = 64*1024*1024)
     SIMPLE_FACTOR_END;
 
 void
-pminus1_factor(IN char* strn, IN UV smoothness = 1000000, IN UV B2 = 0)
+pminus1_factor(IN char* strn, IN UV B1 = 5000000, IN UV B2 = 0)
   PREINIT:
     mpz_t n;
   PPCODE:
     SIMPLE_FACTOR_START("pminus1_factor");
-    if (B2 == 0) { /* Without a B2, increment up */
-      UV B = 5;
-      success = 0;
-      while (!success) {
-        success = _GMP_pminus1_factor(n, f, B, 20*B);
-        if (B == smoothness) break;
-        B = 20*B;
-        if (B > smoothness) B = smoothness;
-      }
-    } else {
-      /* Given a B1 and B2, do just what they asked. */
-      success = _GMP_pminus1_factor(n, f, smoothness, B2);
-    }
-    /* success = _GMP_pminus1_factor2(n, f, smoothness); */
+    success = _GMP_pminus1_factor(n, f, B1, (B2 == 0) ? B1*10 : B2);
     SIMPLE_FACTOR_END;
 
 void
@@ -321,6 +371,15 @@ squfof_factor(IN char* strn, IN UV maxrounds = 16*1024*1024)
   PPCODE:
     SIMPLE_FACTOR_START("squfof_factor");
     success = _GMP_squfof_factor(n, f, maxrounds);
+    SIMPLE_FACTOR_END;
+
+void
+ecm_factor(IN char* strn, IN UV bmax = 15625000, IN UV ncurves = 100)
+  PREINIT:
+    mpz_t n;
+  PPCODE:
+    SIMPLE_FACTOR_START("ecm_factor");
+    success = _GMP_ecm_factor(n, f, bmax, ncurves);
     SIMPLE_FACTOR_END;
 
 void
@@ -352,7 +411,7 @@ _GMP_factor(IN char* strn)
 
       mpz_init(f);
       do { /* loop over each remaining factor */
-        while ( mpz_cmp_ui(n, TRIAL_LIM*TRIAL_LIM) > 0 && !_GMP_is_prime(n) ) {
+        while ( mpz_cmp_ui(n, TRIAL_LIM*TRIAL_LIM) > 0 && !_GMP_is_prob_prime(n) ) {
           int success = 0;
           int o = _GMP_get_verbose();
 
@@ -371,39 +430,46 @@ _GMP_factor(IN char* strn)
            * was a single semiprime.  For comparison, Pari took about 1 minute
            * on the same machine to factor the 150-digit number.
            *
-           * A half-decent ECM, MPQS, or SIQS factoring method would be a
-           * big help in factoring larger numbers.  This code will take far
-           * too long to factor numbers where the smallest factor is 17+ digits,
-           * while software like gmp-ecm, msieve, or yafu have no troubles.
+           * After adding simple ECM, the examples above are a little faster.
+           * Previously we were very slow for 17+ digit factors, where it
+           * will now often pull out 21 digit factors in a reasonable time.
+           * A decent little MPQS or SIQS method would help extend this.
+           * Software like gmp-ecm, msieve, or yafu will be much faster for
+           * large numbers.
            *
            * On the plus side, this GMP code is far, far faster than Perl
            * bigint code, and gives an easy way for Perl programs to factor
            * many large numbers easily and quickly.
            */
 
-          success =                _GMP_prho_factor(n, f, 3, 64*1024);
-          if (!success)  success = _GMP_prho_factor(n, f, 5, 64*1024);
-          if (!success)  success = _GMP_prho_factor(n, f, 7, 64*1024);
-          if (!success)  success = _GMP_prho_factor(n, f,11, 64*1024);
-          if (!success)  success = _GMP_prho_factor(n, f,13, 64*1024);
+          success =                _GMP_pbrent_factor(n, f, 3, 64*1024);
+          if (!success)  success = _GMP_pbrent_factor(n, f, 5, 64*1024);
+          if (!success)  success = _GMP_pbrent_factor(n, f, 7, 64*1024);
+          if (!success)  success = _GMP_pbrent_factor(n, f,11, 64*1024);
+          if (!success)  success = _GMP_pbrent_factor(n, f,13, 64*1024);
           if (success&&o) {gmp_printf("small prho found factor %Zd\n", f);o=0;}
 
+          if (!success)  success = _GMP_power_factor(n, f);
+          if (success&&o) {gmp_printf("perfect power found factor %Zd\n", f);o=0;}
+
           /* Small p-1 */
-          {
-            UV B = 5;
-            while (!success) {
-              success = _GMP_pminus1_factor(n, f, B, 10*B);
-              if (B == 5000) break;
-              B = 10*B;
-              if (B > 5000) B = 5000;
-            }
-          }
-          if (success&&o) {gmp_printf("p-1 (50k) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_pminus1_factor(n, f, 100000, 1000000);
+          if (success&&o) {gmp_printf("p-1 (100k) found factor %Zd\n", f);o=0;}
 
-          if (!success)  success = _GMP_pbrent_factor(n, f, 1, 32*1024*1024);
-          if (success&&o) {gmp_printf("pbrent (1,32M) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_ecm_factor(n, f, 12500, 4);
+          if (success&&o) {gmp_printf("small ecm found factor %Zd\n", f);o=0;}
 
-          if (!success)  success = _GMP_prho_factor(n, f,17, 32*1024*1024);
+          if (!success)  success = _GMP_pbrent_factor(n, f, 1, 16*1024*1024);
+          if (success&&o) {gmp_printf("pbrent (1,16M) found factor %Zd\n", f);o=0;}
+
+          /* ECM with high bmax but only 2 curves. */
+          if (!success)  success = _GMP_ecm_factor(n, f, 625000, 2);
+          if (success&&o) {gmp_printf("ecm (625k,2) ecm found factor %Zd\n", f);o=0;}
+          /* Getting serious with ECM */
+          if (!success)  success = _GMP_ecm_factor(n, f, 3125000, 40);
+          if (success&&o) {gmp_printf("ecm (3M,40) found factor %Zd\n", f);o=0;}
+
+          if (!success)  success = _GMP_prho_factor(n, f, 17, 32*1024*1024);
           if (success&&o) {gmp_printf("prho (17,32M) found factor %Zd\n", f);o=0;}
 
           /* HOLF in case it's a near-ratio-of-perfect-square */
@@ -411,20 +477,24 @@ _GMP_factor(IN char* strn)
           if (success&&o) {gmp_printf("holf found factor %Zd\n", f);o=0;}
 
           /* Large p-1 with stage 2: B2 = 20*B1 */
-          if (!success)  success = _GMP_pminus1_factor(n, f, 3000000, 3000000*20);
+          if (!success)  success = _GMP_pminus1_factor(n, f, 5000000, 5000000*20);
           if (success&&o) {gmp_printf("p-1 (3M) found factor %Zd\n", f);o=0;}
 
           if (!success)  success = _GMP_pbrent_factor(n, f, 3, 256*1024*1024);
           if (success&&o) {gmp_printf("pbrent (3,256M) found factor %Zd\n", f);o=0;}
 
+          /*
           if (!success)  success = _GMP_pbrent_factor(n, f, 2, 512*1024*1024);
           if (success&&o) {gmp_printf("pbrent (2,512M) found factor %Zd\n", f);o=0;}
 
-          if (!success && _GMP_get_verbose()) gmp_printf("starting squfof on %Zd\n", n);
           if (!success)  success = _GMP_squfof_factor(n, f, 256*1024*1024);
           if (success&&o) {gmp_printf("squfof found factor %Zd\n", f);o=0;}
+          */
 
-          /* if (!success)  croak("Could not factor n: %s\n", strn); */
+          /* Our method of last resort: ECM with high bmax and many curves*/
+          if (!success && _GMP_get_verbose()) gmp_printf("starting large ECM on %Zd\n", n);
+          if (!success)  success = _GMP_ecm_factor(n, f, 400000000, 200);
+          if (success&&o) {gmp_printf("ecm (400M,200) found factor %Zd\n", f);o=0;}
 
           if (success) {
             if (!mpz_divisible_p(n, f) || !mpz_cmp_ui(f, 1) || !mpz_cmp(f, n)) {
@@ -433,7 +503,14 @@ _GMP_factor(IN char* strn)
             }
           }
 
-          if (_GMP_is_prime(f)) {
+          if (!success) {
+            /* TODO: What to do with composites we can't factor?
+             *       Push them as "C#####" ?
+             *       For now, just push them as if we factored.
+             */
+            mpz_set(f, n);
+            XPUSH_MPZ(f);
+          } else if (_GMP_is_prob_prime(f)) {
             XPUSH_MPZ(f);
           } else {
             if (ntofac == MAX_FACTORS-1)
