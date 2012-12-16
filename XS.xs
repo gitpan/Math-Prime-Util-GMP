@@ -53,6 +53,13 @@ PROTOTYPES: ENABLE
 void
 _GMP_set_verbose(IN int v)
 
+void
+_GMP_init()
+
+void
+_GMP_destroy()
+
+
 int
 _GMP_miller_rabin(IN char* strn, IN char* strbase)
   PREINIT:
@@ -134,6 +141,18 @@ is_provable_prime(IN char* strn)
     mpz_clear(n);
   OUTPUT:
     RETVAL
+
+int
+is_aks_prime(IN char* strn)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    PRIMALITY_START("is_aks_prime", 2);
+    RETVAL = _GMP_is_aks_prime(n);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
 
 #define XPUSH_MPZ(n) \
   { \
