@@ -68,6 +68,15 @@ int _GMP_miller_rabin(mpz_t n, mpz_t a)
   s = mpz_scan1(d, 0);
   mpz_tdiv_q_2exp(d, d, s);
 
+  /* Handle large and small bases.  TODO: don't modify their input a */
+  if (mpz_cmp(a, n) >= 0)
+    mpz_mod(a, a, n);
+  if ( (mpz_cmp_ui(a, 1) <= 0) || (mpz_cmp(a, nminus1) >= 0) ) {
+    mpz_clear(nminus1);
+    mpz_clear(d);
+    return 1;
+  }
+
   mpz_init(x);
   mpz_powm(x, a, d, n);
   mpz_clear(d); /* done with a and d */
@@ -997,8 +1006,8 @@ int _GMP_prho_factor(mpz_t n, mpz_t f, UV a, UV rounds)
       mpz_mul(U, U, U);  mpz_add_ui(U, U, a);  mpz_tdiv_r(U, U, n);
       mpz_mul(V, V, V);  mpz_add_ui(V, V, a);  mpz_tdiv_r(V, V, n);
       mpz_mul(V, V, V);  mpz_add_ui(V, V, a);  mpz_tdiv_r(V, V, n);
-      mpz_sub(f, U, V);
-      if (mpz_sgn(f) < 0)  mpz_add(f, f, n);
+      if (mpz_cmp(U, V) >= 0)  mpz_sub(f, U, V);
+      else                     mpz_sub(f, V, U);
       mpz_mul(m, m, f);
       mpz_tdiv_r(m, m, n);
     }
@@ -1013,8 +1022,8 @@ int _GMP_prho_factor(mpz_t n, mpz_t f, UV a, UV rounds)
         mpz_mul(U, U, U);  mpz_add_ui(U, U, a);  mpz_tdiv_r(U, U, n);
         mpz_mul(V, V, V);  mpz_add_ui(V, V, a);  mpz_tdiv_r(V, V, n);
         mpz_mul(V, V, V);  mpz_add_ui(V, V, a);  mpz_tdiv_r(V, V, n);
-        mpz_sub(f, U, V);
-        if (mpz_sgn(f) < 0)  mpz_add(f, f, n);
+        if (mpz_cmp(U, V) >= 0)  mpz_sub(f, U, V);
+        else                     mpz_sub(f, V, U);
         mpz_gcd(f, f, n);
       } while (!mpz_cmp_ui(f, 1) && i-- != 0);
       if ( (!mpz_cmp_ui(f, 1)) || (!mpz_cmp(f, n)) )  break;
@@ -1029,7 +1038,7 @@ int _GMP_prho_factor(mpz_t n, mpz_t f, UV a, UV rounds)
 
 int _GMP_pbrent_factor(mpz_t n, mpz_t f, UV a, UV rounds)
 {
-  mpz_t Xi, Xm, saveXi, m;
+  mpz_t Xi, Xm, saveXi, m, t;
   UV i, r;
   const UV inner = 256;
 
@@ -1037,6 +1046,7 @@ int _GMP_pbrent_factor(mpz_t n, mpz_t f, UV a, UV rounds)
   mpz_init_set_ui(Xi, 2);
   mpz_init_set_ui(Xm, 2);
   mpz_init(m);
+  mpz_init(t);
   mpz_init(saveXi);
 
   r = 1;
@@ -1047,11 +1057,11 @@ int _GMP_pbrent_factor(mpz_t n, mpz_t f, UV a, UV rounds)
       mpz_set_ui(m, 1);
       mpz_set(saveXi, Xi);
       for (i = 0; i < dorounds; i++) {
-        mpz_mul(Xi, Xi, Xi);  mpz_add_ui(Xi, Xi, a);  mpz_tdiv_r(Xi, Xi, n);
-        mpz_sub(f, Xi, Xm);
-        if (mpz_sgn(f) < 0)  mpz_add(f, f, n);
-        mpz_mul(m, m, f);
-        mpz_tdiv_r(m, m, n);
+        mpz_mul(t, Xi, Xi);  mpz_add_ui(t, t, a);  mpz_tdiv_r(Xi, t, n);
+        if (mpz_cmp(Xi, Xm) >= 0)  mpz_sub(f, Xi, Xm);
+        else                       mpz_sub(f, Xm, Xi);
+        mpz_mul(t, m, f);
+        mpz_tdiv_r(m, t, n);
       }
       rleft -= dorounds;
       rounds -= dorounds;
@@ -1068,17 +1078,17 @@ int _GMP_pbrent_factor(mpz_t n, mpz_t f, UV a, UV rounds)
       /* f == n, so we have to back up to see what factor got found */
       mpz_set(Xi, saveXi);
       do {
-        mpz_mul(Xi, Xi, Xi);  mpz_add_ui(Xi, Xi, a);  mpz_tdiv_r(Xi, Xi, n);
-        mpz_sub(f, Xi, Xm);
-        if (mpz_sgn(f) < 0)  mpz_add(f, f, n);
+        mpz_mul(t, Xi, Xi);  mpz_add_ui(t, t, a);  mpz_tdiv_r(Xi, t, n);
+        if (mpz_cmp(Xi, Xm) >= 0)  mpz_sub(f, Xi, Xm);
+        else                       mpz_sub(f, Xm, Xi);
         mpz_gcd(f, f, n);
       } while (!mpz_cmp_ui(f, 1) && r-- != 0);
       if ( (!mpz_cmp_ui(f, 1)) || (!mpz_cmp(f, n)) )  break;
     }
-    mpz_clear(Xi); mpz_clear(Xm); mpz_clear(m); mpz_clear(saveXi);
+    mpz_clear(Xi); mpz_clear(Xm); mpz_clear(m); mpz_clear(saveXi); mpz_clear(t);
     return 1;
   }
-  mpz_clear(Xi); mpz_clear(Xm); mpz_clear(m); mpz_clear(saveXi);
+  mpz_clear(Xi); mpz_clear(Xm); mpz_clear(m); mpz_clear(saveXi); mpz_clear(t);
   mpz_set(f, n);
   return 0;
 }
@@ -1261,13 +1271,13 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
         mpz_init_set(precomp_bm[qdiff], bmdiff);
         is_precomp[qdiff] = 1;
       }
-      mpz_mul(a, a, bmdiff);
-      mpz_tdiv_r(a, a, n);
+      mpz_mul(t, a, bmdiff);
+      mpz_tdiv_r(a, t, n);
       if ( !mpz_sgn(a) )
         break;
       mpz_sub_ui(t, a, 1);
-      mpz_mul(b, b, t);
-      mpz_tdiv_r(b, b, n);
+      mpz_mul(t, b, t);
+      mpz_tdiv_r(b, t, n);
       if ( (j++ % 64) == 0) {     /* GCD every so often */
         mpz_gcd(f, b, n);
         if ( (mpz_cmp_ui(f, 1) != 0) && (mpz_cmp(f, n) != 0) )
@@ -1588,7 +1598,7 @@ static void _ec_add_AB(mpz_t n,
 
   /* m = (y2 - y1) * (x2 - x1)^-1 mod n */
   if (!mpz_invert(t1, t2, n)) {
-    /* There are ways we should use to handle this, but for now just bail. */
+    /* We've found a factor!  In multiply, gcd(mult,n) will be a factor. */
     mpz_set_ui(P3->x, 0);
     mpz_set_ui(P3->y, 1);
     return;
@@ -1674,6 +1684,7 @@ static int _ec_multiply(mpz_t a, UV k, mpz_t n, struct _ec_point P, struct _ec_p
         mpz_set(B.x, A.x);  mpz_set(B.y, A.y);
       } else {
         _ec_add_AB(n, A, B, &C, t, t2, t3);
+        /* If the add failed to invert, then we have a factor. */
         mpz_set(B.x, C.x);  mpz_set(B.y, C.y);
       }
       k--;

@@ -4,7 +4,7 @@
       "Dana A Jacobsen <dana@acm.org>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.6302, CPAN::Meta::Converter version 2.120921",
+   "generated_by" : "ExtUtils::MakeMaker version 6.64, CPAN::Meta::Converter version 2.120921",
    "license" : [
       "perl_5"
    ],
@@ -31,6 +31,9 @@
          }
       },
       "runtime" : {
+         "recommends" : {
+            "Math::Prime::Util" : "0.024"
+         },
          "requires" : {
             "Carp" : "0",
             "Exporter" : "5.562",
@@ -41,5 +44,11 @@
       }
    },
    "release_status" : "stable",
-   "version" : "0.06"
+   "resources" : {
+      "homepage" : "https://github.com/danaj/Math-Prime-Util-GMP",
+      "repository" : {
+         "url" : "https://github.com/danaj/Math-Prime-Util-GMP"
+      }
+   },
+   "version" : "0.07"
 }

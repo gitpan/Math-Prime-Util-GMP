@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.06';
+  $Math::Prime::Util::GMP::VERSION = '0.07';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -55,8 +55,12 @@ END {
 sub _validate_positive_integer {
   my($n, $min, $max) = @_;
   croak "Parameter must be defined" if !defined $n;
-  croak "Parameter '$n' must be a positive integer"
-        if $n eq '' || $n =~ tr/0123456789//c;
+  if (ref($n) eq 'Math::BigInt') {
+    croak "Parameter '$n' must be a positive integer" unless $n->sign() eq '+';
+  } else {
+    croak "Parameter '$n' must be a positive integer"
+          if $n eq '' || $n =~ tr/0123456789//c;
+  }
   croak "Parameter '$n' must be >= $min" if defined $min && $n < $min;
   croak "Parameter '$n' must be <= $max" if defined $max && $n > $max;
   1;
@@ -65,10 +69,10 @@ sub _validate_positive_integer {
 
 sub is_strong_pseudoprime {
   my($n, @bases) = @_;
-  croak "Parameter must be defined" if !defined $n;
+  _validate_positive_integer($n);
   croak "No bases given to is_strong_pseudoprime" unless @bases;
   foreach my $base (@bases) {
-    _validate_positive_integer($base, 2);
+    _validate_positive_integer($base);
     return 0 unless _GMP_miller_rabin("$n", "$base");
   }
   1;
@@ -130,7 +134,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.06
+Version 0.07
 
 
 =head1 SYNOPSIS
@@ -166,7 +170,7 @@ Version 0.06
   say "23# is ", primorial(23);
   say "The product of the first 47 primes is ", pn_primorial(47);
   say "lcm(1..1000) is ", consecutive_integer_lcm(1000);
-  
+
 
   # Find prime factors of big numbers
   @factors = factor(5465610891074107968111136514192945634873647594456118359804135903459867604844945580205745718497);
@@ -232,7 +236,7 @@ like C<is_prob_prime>, as will numbers less than C<2^64>.  For numbers
 larger than C<2^64>, some additional tests are performed on probable primes
 to see if they can be proven by another means.
 
-Currently the the method used once numbers have been marked probably
+Currently the method used once numbers have been marked probably
 prime by BPSW is the BLS75 method: Brillhart, Lehmer, and Selfridge's
 improvement to the Pocklington-Lehmer primality test.  The test requires
 factoring C<n-1> to C<(n/2)^(1/3)>, compared to C<n^(1/2)> of the standard
@@ -263,14 +267,22 @@ to return a certificate.
 
 Takes a positive number as input and one or more bases.  Returns 1 if the
 input is a prime or a strong pseudoprime to all of the bases, and 0 if not.
+The base must be a positive integer.
 
 If 0 is returned, then the number really is a composite.  If 1 is returned,
 then it is either a prime or a strong pseudoprime to all the given bases.
 Given enough distinct bases, the chances become very strong that the number
 number is actually prime.
 
-Both the input number and the bases may be big integers.  The bases must be
-greater than 1, however they may be as large as desired.
+Both the input number and the bases may be big integers.  If base modulo n
+E<lt>= 1 or base modulo n = n-1, then the result will be 1.  This allows the
+bases to be larger than n if desired, while still returning meaningful results.
+For example,
+
+  is_strong_pseudoprime(367, 1101)
+
+would incorrectly return 0 if this was not done properly.  A 0 result should
+be returned only if n is composite, regardless of the base.
 
 This is usually used in combination with other tests to make either stronger
 tests (e.g. the strong BPSW test) or deterministic results for numbers less
@@ -570,11 +582,12 @@ factoring range of this module.
 =over 4
 
 =item  L<Math::Prime::Util>.
-Has many more functions, lots of good code for dealing with native-precision
+Has many more functions, lots of fast code for dealing with native-precision
 arguments (including much faster primes using sieves), and will use this
-module behind the scenes when needed for big numbers.
+module when needed for big numbers.  Using L<Math::Prime::Util> rather than
+this module directly is recommended.
 
-=item  L<Math::Primality> (version 0.07)
+=item  L<Math::Primality> (version 0.08)
 A Perl module with support for the strong Miller-Rabin test, strong
 Lucas-Selfridge test, the BPSW probable prime test, next_prime / prev_prime,
 the AKS primality test, and prime_count.  It uses L<Math::GMPz> to do all
@@ -583,7 +596,13 @@ than XS+GMP.  The prime_count function is only usable for very small inputs,
 but the other functions are quite good for big numbers.  Make sure to use
 version 0.05 or newer.
 
-=item L<yafu|http://sourceforge.net/projects/yafu/>, 
+=item L<Math::Pari>
+Supports quite a bit of the same functionality (and much more).  See
+L<Math::Prime::Util/"SEE ALSO"> for more detailed information on how the
+modules compare.  For factoring, L<Math::Pari> will typically be faster
+with 25+ digit numbers and much faster as the size increases.
+
+=item L<yafu|http://sourceforge.net/projects/yafu/>,
 L<msieve|http://sourceforge.net/projects/msieve/>,
 L<gmp-ecm|http://ecm.gforge.inria.fr/>,
 L<GGNFS|http://sourceforge.net/projects/ggnfs/>
