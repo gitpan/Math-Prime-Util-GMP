@@ -1,11 +1,4 @@
 
-- ECM
-  See "An Implementation of the Elliptic Curve Integer Factorization Method"
-  by Bosma and AK Lenstra
-  Also http://www.ne.lpfritz.org/ftp/Prime/
-
-- ECM should add a stage 2.
-
 - prime_count - needs the pc(#) option as well as pc(#,#)
 
 - Consider adding Lehmer's method for prime count.  The only use I can really
@@ -22,3 +15,7 @@
 - Add Riemann R function
 
 - M-R with large bases, don't modify the input a.
+
+- Tune and improve SIMPQS for our uses.  Check FLINT 2.3 for improvements.
+
+- Write our own QS.

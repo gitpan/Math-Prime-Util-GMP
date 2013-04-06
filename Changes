@@ -1,5 +1,30 @@
 Revision history for Perl extension Math::Prime::Util::GMP
 
+0.08   5 April 2013
+
+    - Switch to a projective ECM with a stage 2.  Much better results, but
+      note that it doesn't build up to B1 like the old version.  This has
+      a big impact on factoring and primality proving.
+
+    - Add a QS based on William Hart's SIMPQS (a simple QS that is a
+      predecessor to what went into FLINT).  Not the fastest by a long shot
+      (yafu and msieve take that prize), but it's quite small and works pretty
+      well.  Eventually this will get replaced with a home-built QS.  Meanwhile
+      some improvements from version 2.0 that remain are (1) no partial
+      relations, (2) uses too much memory, and (3) uses GE instead of
+      jasonp's block Lanczos.
+
+    - The new ECM and QS make factoring much faster, especially for 30+
+      digit inputs.  Factoring should give reasonable times out to 70+
+      digits now.  Time is competitive with Math::Pari now, and often faster
+      (noting that Math::Pari uses a fairly old version of Pari).
+
+    - Factoring mix redone given the big changes in ECM and QS.
+
+    - Primality proofs adjusted to better use p-1 and ECM.  The quick proof
+      in is_prime has a higher success rate for all input sizes and is a
+      little faster for small numbers.  is_provable_prime is 10-50x faster.
+
 0.07  19 March 2013
 
     - Tiny speedup when passing in bigints.

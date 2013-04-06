@@ -10,6 +10,9 @@
 #include "ptypes.h"
 #include "gmp_main.h"
 #include "small_factor.h"
+#include "ecm.h"
+#include "simpqs.h"
+#define _GMP_ECM_FACTOR _GMP_ecm_factor_projective
 
 /* Instead of trying to suck in lots of Math::BigInt::GMP and be terribly
  * clever (and brittle), just do all C<->Perl bigints via strings.  It's
@@ -395,13 +398,49 @@ squfof_factor(IN char* strn, IN UV maxrounds = 16*1024*1024)
     SIMPLE_FACTOR_END;
 
 void
-ecm_factor(IN char* strn, IN UV bmax = 15625000, IN UV ncurves = 100)
+ecm_factor(IN char* strn, IN UV bmax = 0, IN UV ncurves = 100)
   PREINIT:
     mpz_t n;
   PPCODE:
     SIMPLE_FACTOR_START("ecm_factor");
-    success = _GMP_ecm_factor(n, f, bmax, ncurves);
+    if (bmax == 0) {
+                    success = _GMP_ecm_factor_projective(n, f,     1000, 40);
+      if (!success) success = _GMP_ecm_factor_projective(n, f,    10000, 40);
+      if (!success) success = _GMP_ecm_factor_projective(n, f,   100000, 40);
+      if (!success) success = _GMP_ecm_factor_projective(n, f,  1000000, 40);
+      if (!success) success = _GMP_ecm_factor_projective(n, f, 10000000, 100);
+    } else {
+      success = _GMP_ecm_factor_projective(n, f, bmax, ncurves);
+    }
     SIMPLE_FACTOR_END;
+
+void
+qs_factor(IN char* strn)
+  PREINIT:
+    mpz_t n;
+  PPCODE:
+    /* Returns multiple factors, so do this separately */
+    validate_string_number("qs_factor (n)", strn);
+    mpz_init_set_str(n, strn, 10);
+    if (mpz_cmp_ui(n, 3) <= 0) {
+      XPUSH_MPZ(n);
+    } else {
+      if (_GMP_is_prob_prime(n)) {
+        XPUSH_MPZ(n);
+      } else {
+        mpz_t farray[66];
+        int i, nfactors;
+        for (i = 0; i < 66; i++)
+          mpz_init(farray[i]);
+        nfactors = _GMP_simpqs(n, farray);
+        for (i = 0; i < nfactors; i++) {
+          XPUSH_MPZ(farray[i]);
+        }
+        for (i = 0; i < 66; i++)
+          mpz_clear(farray[i]);
+      }
+    }
+    mpz_clear(n);
 
 void
 _GMP_factor(IN char* strn)
@@ -435,35 +474,22 @@ _GMP_factor(IN char* strn)
         while ( mpz_cmp_ui(n, TRIAL_LIM*TRIAL_LIM) > 0 && !_GMP_is_prob_prime(n) ) {
           int success = 0;
           int o = _GMP_get_verbose();
+          UV B1 = 5000;
 
           /*
            * This set of operations is meant to provide good performance for
            * "random" numbers as input.  Hence we stack lots of effort up front
            * looking for small factors: prho and pbrent are ~ O(f^1/2) where
            * f is the smallest factor.  SQUFOF is O(N^1/4), so arguable not
-           * any better.
+           * any better.  p-1 and ECM are quite useful for pulling out small
+           * factors (6-20 digits).
            *
-           * On my small 32-bit workstation, these will factor a 778-digit
-           * number consisting of 101 8-digit factors in under 10 seconds.
-           * A 246-digit number with 21 12-digit factors took a little under
-           * two minutes.  A 150-digit number consisting p12 * 10 p14's took
-           * 4.5 minutes.  Times for all of these would be faster if the input
-           * was a single semiprime.  For comparison, Pari took about 1 minute
-           * on the same machine to factor the 150-digit number.
-           *
-           * After adding simple ECM, the examples above are a little faster.
-           * Previously we were very slow for 17+ digit factors, where it
-           * will now often pull out 21 digit factors in a reasonable time.
-           * A decent little MPQS or SIQS method would help extend this.
-           * Software like gmp-ecm, msieve, or yafu will be much faster for
-           * large numbers.
-           *
-           * On the plus side, this GMP code is far, far faster than Perl
-           * bigint code, and gives an easy way for Perl programs to factor
-           * many large numbers easily and quickly.
+           * Factoring a 778-digit number consisting of 101 8-digit factors
+           * should complete in under 3 seconds.  Factoring numbers consisting
+           * of many 12-digit or 14-digit primes should take under 10 seconds.
            */
 
-          if (mpz_cmp_ui(n, UV_MAX>>2) < 0) {
+          if (mpz_cmp_ui(n, (unsigned long)(UV_MAX>>2)) < 0) {
             UV ui_n = mpz_get_ui(n);
             UV ui_factors[2];
             if (!mpz_cmp_ui(n, ui_n)) {
@@ -477,42 +503,92 @@ _GMP_factor(IN char* strn)
             if (success&&o) {gmp_printf("UV SQUFOF found factor %Zd\n", f);o=0;}
           }
 
-          if (!success)  success = _GMP_pbrent_factor(n, f, 3, 256*1024);
-          if (success&&o) {gmp_printf("small prho found factor %Zd\n", f);o=0;}
-
+          /* Make sure it isn't a perfect power */
           if (!success)  success = _GMP_power_factor(n, f);
           if (success&&o) {gmp_printf("perfect power found factor %Zd\n", f);o=0;}
 
+          if (!success)  success = _GMP_pminus1_factor(n, f, 10000, 200000);
+          if (success&&o) {gmp_printf("p-1 (10k) found factor %Zd\n", f);o=0;}
+
+          /* Really small ECM to find small factors */
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 150, 50);
+          if (success&&o) {gmp_printf("tiny ecm (150) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 500, 30);
+          if (success&&o) {gmp_printf("tiny ecm (500) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 2000, 10);
+          if (success&&o) {gmp_printf("tiny ecm (2000) found factor %Zd\n", f);o=0;}
+
           /* Small p-1 */
-          if (!success)  success = _GMP_pminus1_factor(n, f, 100000, 1000000);
-          if (success&&o) {gmp_printf("p-1 (100k) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_pminus1_factor(n, f, 200000, 4000000);
+          if (success&&o) {gmp_printf("p-1 (200k) found factor %Zd\n", f);o=0;}
 
-          if (!success)  success = _GMP_ecm_factor(n, f, 12500, 4);
-          if (success&&o) {gmp_printf("small ecm found factor %Zd\n", f);o=0;}
+          /* ECM with a good chance of success */
+          if (!success) {
+            UV bits = mpz_sizeinbase(n, 2);
+            UV curves = 20;
+            if      (bits < 100)  B1 =   5000;     /* All need tuning */
+            else if (bits < 128)  B1 =  10000;
+            else if (bits < 160)  B1 =  20000;
+            else if (bits < 192)  B1 =  30000;
+            else if (bits < 224){ B1 =  40000; curves =  40; }
+            else if (bits < 256){ B1 =  80000; curves =  40; }
+            else if (bits < 512){ B1 = 160000; curves =  80; }
+            else                { B1 = 320000; curves = 160; }
+            success = _GMP_ECM_FACTOR(n, f, B1, curves);
+            if (success&&o) {gmp_printf("small ecm (%luk,%lu) found factor %Zd\n", B1/1000, curves, f);o=0;}
+          }
 
-          if (!success)  success = _GMP_pbrent_factor(n, f, 1, 16*1024*1024);
-          if (success&&o) {gmp_printf("pbrent (1,16M) found factor %Zd\n", f);o=0;}
+          /* QS (30+ digits).  Fantastic if it is a semiprime, but can be
+           * slow and a memory hog if not (compared to ECM).  Restrict to
+           * reasonable size numbers (< 91 digits).  Because of the way it
+           * works, it will generate (possibly) multiple factors for the same
+           * amount of work.  Go to some trouble to use them. */
+          if (!success && mpz_sizeinbase(n,10)>=30 && mpz_sizeinbase(n,2)<300) {
+            mpz_t farray[66];
+            int i, nfactors;
+            for (i = 0; i < 66; i++)
+              mpz_init(farray[i]);
+            nfactors = _GMP_simpqs(n, farray);
+            mpz_set(f, farray[0]);
+            if (nfactors > 2) {
+              /* We found multiple factors */
+              for (i = 2; i < nfactors; i++) {
+                if (o){gmp_printf("SIMPQS found extra factor %Zd\n",farray[i]);}
+                if (ntofac == MAX_FACTORS-1) croak("Too many factors\n");
+                mpz_init_set(tofac_stack[ntofac], farray[i]);
+                ntofac++;
+                mpz_divexact(n, n, farray[i]);
+              }
+              /* f = farray[0], n = farray[1], farray[2..] pushed */
+            }
+            for (i = 0; i < 66; i++)
+              mpz_clear(farray[i]);
+            success = nfactors > 1;
+            if (success&&o) {gmp_printf("SIMPQS found factor %Zd\n", f);o=0;}
+          }
 
-          /* ECM with high bmax but only 2 curves. */
-          if (!success)  success = _GMP_ecm_factor(n, f, 625000, 2);
-          if (success&&o) {gmp_printf("ecm (625k,2) ecm found factor %Zd\n", f);o=0;}
-          /* Getting serious with ECM */
-          if (!success)  success = _GMP_ecm_factor(n, f, 3125000, 40);
-          if (success&&o) {gmp_printf("ecm (3M,40) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 2*B1, 20);
+          if (success&&o) {gmp_printf("ecm (%luk,20) found factor %Zd\n",2*B1/1000,f);o=0;}
 
-          if (!success)  success = _GMP_prho_factor(n, f, 17, 32*1024*1024);
-          if (success&&o) {gmp_printf("prho (17,32M) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_pbrent_factor(n, f, 1, 1*1024*1024);
+          if (success&&o) {gmp_printf("pbrent (1,1M) found factor %Zd\n", f);o=0;}
+
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 4*B1, 20);
+          if (success&&o) {gmp_printf("ecm (%luk,20) ecm found factor %Zd\n", 4*B1,f);o=0;}
+
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 8*B1, 20);
+          if (success&&o) {gmp_printf("ecm (%luk,20) ecm found factor %Zd\n", 8*B1,f);o=0;}
 
           /* HOLF in case it's a near-ratio-of-perfect-square */
           if (!success)  success = _GMP_holf_factor(n, f, 1*1024*1024);
           if (success&&o) {gmp_printf("holf found factor %Zd\n", f);o=0;}
 
           /* Large p-1 with stage 2: B2 = 20*B1 */
-          if (!success)  success = _GMP_pminus1_factor(n, f, 5000000, 5000000*20);
-          if (success&&o) {gmp_printf("p-1 (3M) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_pminus1_factor(n,f,5000000,5000000*20);
+          if (success&&o) {gmp_printf("p-1 (5M) found factor %Zd\n", f);o=0;}
 
-          if (!success)  success = _GMP_pbrent_factor(n, f, 3, 256*1024*1024);
-          if (success&&o) {gmp_printf("pbrent (3,256M) found factor %Zd\n", f);o=0;}
+          if (!success)  success = _GMP_ECM_FACTOR(n, f, 32*B1, 40);
+          if (success&&o) {gmp_printf("ecm (%luk,40) ecm found factor %Zd\n", 32*B1,f);o=0;}
 
           /*
           if (!success)  success = _GMP_pbrent_factor(n, f, 2, 512*1024*1024);
@@ -523,9 +599,17 @@ _GMP_factor(IN char* strn)
           */
 
           /* Our method of last resort: ECM with high bmax and many curves*/
-          if (!success && _GMP_get_verbose()) gmp_printf("starting large ECM on %Zd\n", n);
-          if (!success)  success = _GMP_ecm_factor(n, f, 400000000, 200);
-          if (success&&o) {gmp_printf("ecm (400M,200) found factor %Zd\n", f);o=0;}
+          if (!success) {
+            UV i;
+            if (_GMP_get_verbose()) gmp_printf("starting large ECM on %Zd\n",n);
+            B1 *= 8;
+            for (i = 0; i < 10; i++) {
+              success = _GMP_ECM_FACTOR(n, f, B1, 100);
+              if (success) break;
+              B1 *= 2;
+            }
+            if (success&&o) {gmp_printf("ecm (%luk,100) ecm found factor %Zd\n", B1,f);o=0;}
+          }
 
           if (success) {
             if (!mpz_divisible_p(n, f) || !mpz_cmp_ui(f, 1) || !mpz_cmp(f, n)) {
