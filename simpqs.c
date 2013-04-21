@@ -53,7 +53,7 @@
 #include <math.h>
 #include <gmp.h>
 
-#ifdef STANDALONE_SIMPQS
+#ifdef STANDALONE
   typedef unsigned long UV;
   typedef   signed long IV;
   #define INLINE
@@ -68,67 +68,20 @@
   static void prime_iterator_destroy(mpz_t *iter) { mpz_clear(*iter); }
   static void prime_iterator_setprime(mpz_t *iter, UV n) {mpz_set_ui(*iter, n);}
   /* static int prime_iterator_isprime(mpz_t *iter, UV n) {int isp; mpz_t t; mpz_init_set_ui(t, n); isp = mpz_probab_prime_p(t, 10); mpz_clear(t); return isp;} */
+  static int _verbose = 0;
+  static int _GMP_get_verbose(void) { return _verbose; }
 #else
   #include "ptypes.h"
   #include "simpqs.h"
   #include "prime_iterator.h"
+  #include "gmp_main.h"
 
   #include "EXTERN.h"
   #include "perl.h"
   #include "XSUB.h"
 #endif
 
-
-/* tdiv_r is faster, but we'd need to guarantee in the input is positive */
-#define mpz_mulmod(r, a, b, n, t)  \
-  do { mpz_mul(t, a, b); mpz_mod(r, t, n); } while (0)
-
-/* - Tonelli-Shanks: sets asqrt to a square root of a modulo p */
-/* - Return: 0 if a is not a square mod p, 1 otherwise. */
-static int sqrtmod(mpz_t asqrt, mpz_t a, mpz_t p,
-                   mpz_t t, mpz_t t2, mpz_t b, mpz_t g) /* 4 temp variables */
-{
-     int r,k,m,i;
-
-     if (mpz_kronecker(a, p) != 1)
-     {
-         mpz_set_ui(asqrt,0);
-         return 0;   /* return 0 if a is not a square mod p */
-     }
-
-     /* t2 = (p-1) => q2^r => t2 = q. */
-     mpz_sub_ui(t2, p, 1);
-     mpz_set_ui(t, 2);
-     r = mpz_remove(t2, t2, t);
-     mpz_powm(b, a, t2, p);
-     for (k = 2; ; k++)
-       if (mpz_ui_kronecker(k,p) == -1) break;
-     mpz_set_ui(t, k);
-     mpz_powm(g, t, t2, p);
-     mpz_add_ui(t2, t2, 1);
-     mpz_divexact_ui(t2, t2, 2);
-     mpz_powm(asqrt, a, t2, p);
-     if (!mpz_cmp_ui(b,1))
-       return 1;
-
-     while (mpz_cmp_ui(b, 1))
-     {
-       /* calculate how many times b^2 mod p == 1 */
-       mpz_set(t, b);
-       for (m = 1; (m<=r-1) && (mpz_cmp_ui(t,1)); m++)
-         mpz_powm_ui(t, t, 2, p);
-       /* t2 = g^2 mod p a number of times*/
-       mpz_set(t2, g);
-       for (i = 1; i <= r-m-1; i++)
-         mpz_powm_ui(t2, t2, 2, p);
-       mpz_mulmod(asqrt, asqrt, t2, p, t);
-       mpz_powm_ui(t2, t2, 2, p);
-       mpz_mulmod(b, b, t2, p, t);
-       r = m;
-     }
-
-     return 1;
-}
+#include "utility.h"
 
 /* DANAJ: Modify matrix code to do 64-bit-padded character arrays */
 typedef unsigned char* row_t;  /* row of an F2 matrix */
@@ -260,6 +213,20 @@ static unsigned int gaussReduce(matrix_t m, unsigned int cols, unsigned int rows
  /* Report sieve size, multiplier and number of primes used */
 /* #define REPORT */
 
+#ifdef ERRORS
+  #define CHECK_EXPONENT(exponent,k) \
+     if (exponent==0) printf("Error with prime %u!\n", factorBase[k]);
+#else
+  #define CHECK_EXPONENT(exponent,k)
+#endif
+#ifdef RELPRINT
+  #define PRINT_FB(exponent, k) \
+     do { if (exponent > 0) printf(" %u", factorBase[k]); \
+          if (exponent > 1) printf("^%d", exponent); } while (0)
+#else
+  #define PRINT_FB(exponent, k)
+#endif
+
 /*===========================================================================*/
 /* Architecture dependent fudge factors */
 
@@ -388,7 +355,7 @@ static unsigned char * primeSizes; /* array of sizes in bits of fb primes */
 #define RELATIONS_PER_PRIME 100
 static INLINE void set_relation(unsigned long* rel, unsigned int prime, unsigned int nrel, unsigned long val)
 {
-  if (nrel < RELATIONS_PER_PRIME)  
+  if (nrel < RELATIONS_PER_PRIME)
     rel[ prime*RELATIONS_PER_PRIME + nrel ] = val;
 }
 static INLINE unsigned long get_relation(unsigned long* rel, unsigned int prime, unsigned int nrel)
@@ -396,62 +363,6 @@ static INLINE unsigned long get_relation(unsigned long* rel, unsigned int prime,
   return rel[ prime*RELATIONS_PER_PRIME + nrel ];
 }
 
-
-/*========================================================================
-   Modular Inversion:
-
-   Function: GMP has a modular inverse function, but believe it or not,
-             this clumsy implementation is apparently quite a bit faster.
-             It inverts the value a, modulo the prime p, using the extended
-             gcd algorithm.
-
-========================================================================*/
-
-static unsigned long modinverse(unsigned long a, unsigned long p)
-{
-   long u1, u3;
-   long v1, v3;
-   long t1, t3, quot;
-   u1=1; u3=a;
-   v1=0; v3=p;
-   t1=0; t3=0;
-   while (v3)
-   {
-      quot=u3-v3;
-      if (u3 < (v3<<2))
-      {
-         if (quot < v3)
-         {
-            if (quot < 0)
-            {
-               t1 = u1; u1 = v1; v1 = t1;
-               t3 = u3; u3 = v3; v3 = t3;
-            } else
-            {
-               t1 = u1 - v1; u1 = v1; v1 = t1;
-               t3 = u3 - v3; u3 = v3; v3 = t3;
-            }
-         } else if (quot < (v3<<1))
-         {
-            t1 = u1 - (v1<<1); u1 = v1; v1 = t1;
-            t3 = u3 - (v3<<1); u3 = v3; v3 = t3;
-         } else
-         {
-            t1 = u1 - v1*3; u1 = v1; v1 = t1;
-            t3 = u3 - v3*3; u3 = v3; v3 = t3;
-         }
-      } else
-      {
-         quot=u3/v3;
-         t1 = u1 - v1*quot; u1 = v1; v1 = t1;
-         t3 = u3 - v3*quot; u3 = v3; v3 = t3;
-      }
-   }
-
-   if (u1<0) u1+=p;
-
-   return u1;
-}
 
 /*=========================================================================
    Knuth_Schroeppel Multiplier:
@@ -698,8 +609,13 @@ static void evaluateSieve(
            if (factorBase[0] != 1 && mpz_divisible_ui_p(res, factorBase[0]))
            {
              extra += primeSizes[0];
-             mpz_set_ui(temp,factorBase[0]);
-             exponent = mpz_remove(res,res,temp);
+             if (factorBase[0] == 2) {
+                exponent = mpz_scan1(res, 0);
+                mpz_tdiv_q_2exp(res, res, exponent);
+             } else {
+               mpz_set_ui(temp,factorBase[0]);
+               exponent = mpz_remove(res,res,temp);
+             }
              exponents[0] = exponent;
            }
 
@@ -707,8 +623,13 @@ static void evaluateSieve(
            if (mpz_divisible_ui_p(res, factorBase[1]))
            {
              extra += primeSizes[1];
-             mpz_set_ui(temp,factorBase[1]);
-             exponent = mpz_remove(res,res,temp);
+             if (factorBase[1] == 2) {
+                exponent = mpz_scan1(res, 0);
+                mpz_tdiv_q_2exp(res, res, exponent);
+             } else {
+               mpz_set_ui(temp,factorBase[1]);
+               exponent = mpz_remove(res,res,temp);
+             }
              exponents[1] = exponent;
            }
 
@@ -717,21 +638,15 @@ static void evaluateSieve(
               modp=(i+ctimesreps)%factorBase[k];
 
               exponents[k] = 0;
-              if (soln2[k] != (unsigned long)-1 )
+              if (soln2[k] != (unsigned long)-1)
               {
                  if ((modp==soln1[k]) || (modp==soln2[k]))
                  {
                     extra+=primeSizes[k];
                     mpz_set_ui(temp,factorBase[k]);
                     exponent = mpz_remove(res,res,temp);
-
-#ifdef ERRORS
-                    if (exponent==0) printf("Error!\n");
-#endif
-#ifdef RELS
-                    if (exponent > 0) printf(" %ld",(long)factorBase[k]);
-                    if (exponent > 1) printf("^%d",exponent);
-#endif
+                    CHECK_EXPONENT(exponent, k);
+                    PRINT_FB(exponent, k);
                     exponents[k] = exponent;
                  }
               } else if (mpz_divisible_ui_p(res, factorBase[k]))
@@ -739,10 +654,7 @@ static void evaluateSieve(
                  extra += primeSizes[k];
                  mpz_set_ui(temp,factorBase[k]);
                  exponent = mpz_remove(res,res,temp);
-#ifdef RELS
-                 if (exponent > 0) printf(" %ld",(long)factorBase[k]);
-                 if (exponent > 1) printf("^%d",exponent);
-#endif
+                 PRINT_FB(exponent, k);
                  exponents[k] = exponent;
               }
            }
@@ -760,15 +672,8 @@ static void evaluateSieve(
                        extra+=primeSizes[k];
                        mpz_set_ui(temp,factorBase[k]);
                        exponent = mpz_remove(res,res,temp);
-
-#ifdef ERRORS
-                       if (exponent==0) printf("Error!\n");
-#endif
-
-#ifdef RELS
-                       if (exponent > 0) printf(" %ld",(long)factorBase[k]);
-                       if (exponent > 1) printf("^%d",exponent);
-#endif
+                       CHECK_EXPONENT(exponent, k);
+                       PRINT_FB(exponent, k);
                        if (exponent)
                          for (ii = 0; ii < exponent; ii++)
                            set_relation(relations, relsFound, ++numfactors, k);
@@ -780,10 +685,7 @@ static void evaluateSieve(
                     extra += primeSizes[k];
                     mpz_set_ui(temp,factorBase[k]);
                     exponent = mpz_remove(res,res,temp);
-#ifdef RELS
-                    if (exponent > 0) printf(" %ld",(long)factorBase[k]);
-                    if (exponent > 1) printf("^%d",exponent);
-#endif
+                    PRINT_FB(exponent, k);
                     for (ii = 0; ii < exponent; ii++)
                       set_relation(relations, relsFound, ++numfactors, k);
                     if (exponent & 1)
@@ -802,13 +704,8 @@ static void evaluateSieve(
                        extra+=primeSizes[k];
                        mpz_set_ui(temp,factorBase[k]);
                        exponent = mpz_remove(res,res,temp);
-#ifdef ERRORS
-                       if (exponent==0) printf("Error!\n");
-#endif
-#ifdef RELS
-                       if (exponent > 0) printf(" %ld",(long)factorBase[k]);
-                       if (exponent > 1) printf("^%d",exponent);
-#endif
+                       CHECK_EXPONENT(exponent, k);
+                       PRINT_FB(exponent, k);
                        if (exponent)
                          for (ii = 0; ii < exponent; ii++)
                            set_relation(relations, relsFound, ++numfactors, k);
@@ -831,7 +728,7 @@ static void evaluateSieve(
                     (*npartials)++;
                  }
                  clearRow(m,numPrimes,relsFound);
-#ifdef RELS
+#ifdef RELPRINT
                  gmp_printf(" %Zd\n",res);
 #endif
               } else
@@ -844,12 +741,12 @@ static void evaluateSieve(
                        (*npartials)++;
                     }
                     clearRow(m,numPrimes,relsFound);
-#ifdef RELS
+#ifdef RELPRINT
                     gmp_printf(" %Zd\n",res);
 #endif
                  } else
                  {
-#ifdef RELS
+#ifdef RELPRINT
                     printf("....R\n");
 #endif
                     for (ii = 0; ii<firstprime; ii++)
@@ -873,7 +770,7 @@ static void evaluateSieve(
            } else
            {
               clearRow(m,numPrimes,relsFound);
-#ifdef RELS
+#ifdef RELPRINT
               printf("\r                                                                    \r");
 #endif
 
@@ -1071,7 +968,7 @@ static int allprime_factor_array(mpz_t* farray, int nfacs)
   }
   return 1;
 }
-  
+
 static int insert_factor(mpz_t n, mpz_t* farray, int nfacs, mpz_t f)
 {
   int i, j;
@@ -1131,7 +1028,7 @@ static int mainRoutine(
   unsigned long multiplier)
 {
     mpz_t A, B, C, D, Bdivp2, q, r, nsqrtdiv, temp, temp2, temp3, temp4;
-    int i, j, l, s, fact, span, min, nfactors;
+    int i, j, l, s, fact, span, min, nfactors, verbose;
     unsigned long u1, p, reps, numRelations, M;
     unsigned long curves = 0;
     unsigned long npartials = 0;
@@ -1154,6 +1051,7 @@ static int mainRoutine(
     mpz_t          * sqrts;
     matrix_t m;
 
+    verbose = _GMP_get_verbose();
     s = mpz_sizeinbase(n,2)/28+1;
 
     New(  0, exponents, firstprime, int );
@@ -1419,6 +1317,7 @@ static int mainRoutine(
 #ifdef REPORT
     printf("Done with sieving!\n");
 #endif
+    if (verbose>3) printf("# qs done sieving\n");
 
     /* Free everything we don't need for the linear algebra */
 
@@ -1429,7 +1328,7 @@ static int mainRoutine(
       Safefree(Ainv2B[i]);
       mpz_clear(Bterms[i]);
     }
-    Safefree(exponents);  
+    Safefree(exponents);
     Safefree(aind);
     Safefree(amodp);
     Safefree(Ainv);
@@ -1453,7 +1352,7 @@ static int mainRoutine(
 #ifdef REPORT
     printf("%ld relations in kernel.\n", numRelations);
 #endif
-    numRelations += 0;
+    if (verbose>3) printf("# qs found %lu relations in kernel\n", numRelations);
 
     /* We want factors of n, not kn, so divide out by the multiplier */
 
@@ -1494,6 +1393,7 @@ static int mainRoutine(
         mpz_gcd(temp,temp,n);
         /* Only non-trivial factors */
         if (mpz_cmp_ui(temp,1) && mpz_cmp(temp,n) && mpz_divisible_p(n,temp) ) {
+          if (verbose>4) gmp_printf("# qs factor %Zd\n", temp);
           nfactors = insert_factor(n, farray, nfactors, temp);
           verify_factor_array(n, farray, nfactors);
           if (allprime_factor_array(farray, nfactors))
@@ -1520,16 +1420,35 @@ static int mainRoutine(
 int _GMP_simpqs(mpz_t n, mpz_t* farray)
 {
   unsigned long numPrimes, Mdiv2, multiplier, decdigits, relSought;
-  int result;
+  int result = 0;
+  int verbose = _GMP_get_verbose();
 
   mpz_set(farray[0], n);
   decdigits = mpz_sizeinbase(n,10); /* often 1 too big */
   if (decdigits < MINDIG)
     return 0;
 
+  if (verbose>2) gmp_printf("# qs trying %Zd (%lu digits)\n", n, decdigits);
 #ifdef REPORT
   gmp_printf("%Zd (%ld decimal digits)\n", n, decdigits);
 #endif
+
+  /* It's important to remove small factors. */
+  {
+    UV p;
+    PRIME_ITERATOR(iter);
+    for (p = 2; p < 1000; p = prime_iterator_next(&iter)) {
+      if (mpz_cmp_ui(n, p*p) < 0) break;
+      while (mpz_divisible_ui_p(n, p)) {
+        mpz_set_ui(farray[result++], p);
+        mpz_divexact_ui(n, n, p);
+      }
+    }
+    decdigits = mpz_sizeinbase(n,10);
+    if (decdigits < MINDIG)
+      return result;
+    mpz_set(farray[result], n);
+  }
 
   /* Get a preliminary number of primes, pick a multiplier, apply it */
   numPrimes = (decdigits <= 91) ? primesNo[decdigits-MINDIG] : 64000;
@@ -1566,20 +1485,28 @@ int _GMP_simpqs(mpz_t n, mpz_t* farray)
   printf("Sieving interval M = %lu\n",Mdiv2*2);
   printf("Large prime cutoff = factorBase[%u]\n",largeprime);
 #endif
+  if (verbose>2) gmp_printf("# qs    mult %lu, digits %lu, sieving %lu, primes %lu\n", multiplier, decdigits, Mdiv2*2, numPrimes);
 
   /* We probably need fewer than this */
   relSought = numPrimes;
   initFactorBase();
   computeFactorBase(n, numPrimes, multiplier);
 
-  result = mainRoutine(numPrimes, Mdiv2, relSought, n, farray, multiplier);
+  result += mainRoutine(numPrimes, Mdiv2, relSought, n, farray+result, multiplier);
 
   clearFactorBase();
+  if (verbose>2) {
+    int i;
+    gmp_printf("# qs:");
+    for (i = 0; i < result; i++)
+      gmp_printf(" %Zd", farray[i]);
+    gmp_printf("%s\n", (result) ? "" : " no factors");
+  }
   /* if (!result) gmp_printf("QS Fail: %Zd (%ld digits)\n", n, decdigits); */
   return result;
 }
 
-#ifdef STANDALONE_SIMPQS
+#ifdef STANDALONE
 /*===========================================================================
    Main Program:
 

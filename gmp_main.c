@@ -16,6 +16,7 @@
 #include "simpqs.h"
 #include "ecm.h"
 #define _GMP_ECM_FACTOR _GMP_ecm_factor_projective
+#include "utility.h"
 
 static int _verbose = 0;
 void _GMP_set_verbose(int v) { _verbose = v; }
@@ -74,22 +75,22 @@ int _GMP_miller_rabin(mpz_t n, mpz_t a)
   }
   mpz_init_set(nminus1, n);
   mpz_sub_ui(nminus1, nminus1, 1);
-  mpz_init_set(d, nminus1);
+  mpz_init_set(x, a);
 
-  s = mpz_scan1(d, 0);
-  mpz_tdiv_q_2exp(d, d, s);
-
-  /* Handle large and small bases.  TODO: don't modify their input a */
-  if (mpz_cmp(a, n) >= 0)
-    mpz_mod(a, a, n);
-  if ( (mpz_cmp_ui(a, 1) <= 0) || (mpz_cmp(a, nminus1) >= 0) ) {
+  /* Handle large and small bases.  Use x so we don't modify their input a. */
+  if (mpz_cmp(x, n) >= 0)
+    mpz_mod(x, x, n);
+  if ( (mpz_cmp_ui(x, 1) <= 0) || (mpz_cmp(x, nminus1) >= 0) ) {
     mpz_clear(nminus1);
-    mpz_clear(d);
+    mpz_clear(x);
     return 1;
   }
 
-  mpz_init(x);
-  mpz_powm(x, a, d, n);
+  mpz_init_set(d, nminus1);
+  s = mpz_scan1(d, 0);
+  mpz_tdiv_q_2exp(d, d, s);
+
+  mpz_powm(x, x, d, n);
   mpz_clear(d); /* done with a and d */
   rval = 0;
   if (!mpz_cmp_ui(x, 1) || !mpz_cmp(x, nminus1)) {
@@ -301,7 +302,7 @@ int _GMP_is_prime(mpz_t n)
    * to about 50 digits).
    */
   if (mpz_sizeinbase(n, 2) <= 200) {
-    prob_prime = _GMP_primality_bls(n, 1);
+    prob_prime = _GMP_primality_bls(n, 1, 0);
     if (prob_prime < 0)
       return 0;
     if (prob_prime > 0)
@@ -310,7 +311,7 @@ int _GMP_is_prime(mpz_t n)
   return 1;
 }
 
-int _GMP_is_provable_prime(mpz_t n)
+int _GMP_is_provable_prime(mpz_t n, char* prooftext)
 {
   int prob_prime;
 
@@ -329,7 +330,7 @@ int _GMP_is_provable_prime(mpz_t n)
      )
     return 0;
 
-  prob_prime = _GMP_primality_bls(n, 0);
+  prob_prime = _GMP_primality_bls(n, 0, &prooftext);
   if (prob_prime < 0)
     return 0;
   if (prob_prime > 0)
@@ -339,81 +340,6 @@ int _GMP_is_provable_prime(mpz_t n)
 
 /*****************************************************************************/
 /*          AKS.    This implementation is quite slow, but useful to have.   */
-
-static UV order(UV r, mpz_t n, UV limit) {
-  UV j;
-  mpz_t t;
-
-  mpz_init_set_ui(t, 1);
-  for (j = 1; j <= limit; j++) {
-    mpz_mul(t, t, n);
-    mpz_mod_ui(t, t, r);
-    if (!mpz_cmp_ui(t, 1))
-      break;
-  }
-  mpz_clear(t);
-  return j;
-}
-
-static void poly_mod_mul(mpz_t* px, mpz_t* py, mpz_t* ptmp, UV r, mpz_t mod)
-{
-  UV i, j, prindex;
-
-  for (i = 0; i < r; i++)
-    mpz_set_ui(ptmp[i], 0);
-  for (i = 0; i < r; i++) {
-    if (!mpz_sgn(px[i])) continue;
-    for (j = 0; j < r; j++) {
-      if (!mpz_sgn(py[j])) continue;
-      prindex = (i+j) % r;
-      mpz_addmul( ptmp[prindex], px[i], py[j] );
-    }
-  }
-  /* Put ptmp into px and mod n */
-  for (i = 0; i < r; i++)
-    mpz_mod(px[i], ptmp[i], mod);
-}
-static void poly_mod_sqr(mpz_t* px, mpz_t* ptmp, UV r, mpz_t mod)
-{
-  UV i, d, s;
-  UV degree = r-1;
-
-  for (i = 0; i < r; i++)
-    mpz_set_ui(ptmp[i], 0);
-  for (d = 0; d <= 2*degree; d++) {
-    UV prindex = d % r;
-    for (s = (d <= degree) ? 0 : d-degree; s <= (d/2); s++) {
-      if (s*2 == d) {
-        mpz_addmul( ptmp[prindex], px[s], px[s] );
-      } else {
-        mpz_addmul( ptmp[prindex], px[s], px[d-s] );
-        mpz_addmul( ptmp[prindex], px[s], px[d-s] );
-      }
-    }
-  }
-  /* Put ptmp into px and mod n */
-  for (i = 0; i < r; i++)
-    mpz_mod(px[i], ptmp[i], mod);
-}
-
-static void poly_mod_pow(mpz_t *pres, mpz_t *pn, mpz_t *ptmp, mpz_t power, UV r, mpz_t mod)
-{
-  UV i;
-  mpz_t mpow;
-
-  for (i = 0; i < r; i++)
-    mpz_set_ui(pres[i], 0);
-  mpz_set_ui(pres[0], 1);
-
-  mpz_init_set(mpow, power);
-
-  while (mpz_cmp_ui(mpow, 0) > 0) {
-    if (mpz_odd_p(mpow))            poly_mod_mul(pres, pn, ptmp, r, mod);
-    mpz_tdiv_q_2exp(mpow, mpow, 1);
-    if (mpz_cmp_ui(mpow, 0) > 0)    poly_mod_sqr(pn, ptmp, r, mod);
-  }
-  mpz_clear(mpow);
-}
 
 static int test_anr(UV a, mpz_t n, UV r, mpz_t* px, mpz_t* py, mpz_t* ptmp)
 {
@@ -484,7 +410,7 @@ int _GMP_is_aks_prime(mpz_t n)
       mpz_clear(sqrtn);
       return 1;
     }
-    if (order(r, n, limit) > limit)
+    if (mpz_order_ui(r, n, limit) > limit)
       break;
   }
   prime_iterator_destroy(&iter);
@@ -555,9 +481,10 @@ int _GMP_is_aks_prime(mpz_t n)
  *
  * BLS: given n-1 = A*B, factored A, s=B/2A r=B mod (2A), and an a, then if:
  *   - A is even, B is odd, and AB=n-1 (all implied by n = odd and the above),
- *   - (A+1) * (2*A*A + (r-1) * A + 1) > n
- *   - a^(n-1) % n = 1
- *   - gcd(a^((n-1)/f)-1,n) = 1  for ALL factors f of A
+ *   - n < (A+1) * (2*A*A + (r-1) * A + 1)
+ *   - for each each factor f of A, there exists an a (1 < a < n-1) s.t.
+ *     - a^(n-1) % n = 1
+ *     - gcd(a^((n-1)/f)-1,n) = 1  for ALL factors f of A
  * then:
  *     if s = 0 or r*r - 8*s is not a perfect square
  *         n is prime
@@ -605,7 +532,7 @@ int _GMP_is_aks_prime(mpz_t n)
 #define primality_handle_factor(f, primality_func, factor_prob) \
   { \
     int f_prob_prime = _GMP_is_prob_prime(f); \
-    if ( (f_prob_prime == 1) && (primality_func(f, do_quick)) ) \
+    if ( (f_prob_prime == 1) && (primality_func(f, do_quick, prooftextptr)) ) \
       f_prob_prime = 2; \
     if (f_prob_prime == 2) { \
       if (fsp >= PRIM_STACK_SIZE) { success = 0; } \
@@ -742,7 +669,7 @@ int _GMP_primality_pocklington(mpz_t n, int do_quick)
 }
 #endif
 
-int _GMP_primality_bls(mpz_t n, int do_quick)
+int _GMP_primality_bls(mpz_t n, int do_quick, char** prooftextptr)
 {
   mpz_t nm1, A, B, t, m, f, r, s;
   mpz_t mstack[PRIM_STACK_SIZE];
@@ -764,10 +691,11 @@ int _GMP_primality_bls(mpz_t n, int do_quick)
   mpz_init(r);
   mpz_init(s);
 
+#define TRIAL_B1 2000
   { /* Pull small factors out */
     PRIME_ITERATOR(iter);
     UV tf;
-    for (tf = 2; tf < 2000; tf = prime_iterator_next(&iter)) {
+    for (tf = 2; tf < TRIAL_B1; tf = prime_iterator_next(&iter)) {
       if (mpz_cmp_ui(B, tf*tf) < 0) break;
       if (mpz_divisible_ui_p(B, tf)) {
         if (fsp >= PRIM_STACK_SIZE) { success = 0; break; }
@@ -801,6 +729,21 @@ int _GMP_primality_bls(mpz_t n, int do_quick)
 
     if (mpz_cmp(m, n) > 0)
       break;
+#if 0
+    /* Theorem 7 would let us do this, though we also have to do one extra
+     * test at the end finding an a for B (treat the unfactored part B as if
+     * it was the last factor). */
+    mpz_mul(m, t, A);           /* m = 2*A*A               */
+    mpz_sub_ui(t, r, TRIAL_B1); /* t = r-B1                */
+    mpz_mul(t, t, A);           /* t = A*(r-B1)            */
+    mpz_add(m, m, t);           /* m = 2A^2 + A(r-B1)      */
+    mpz_add_ui(m, m, 1);        /* m = 2A^2 + A(r-B1) + 1  */
+    mpz_mul_ui(t, A, TRIAL_B1);
+    mpz_add_ui(t, t, 1);        /* t = B1*A+1              */
+    mpz_mul(m, m, t);           /* m = (B1*A+1)*(2A^2+(r-B1)A+1) */
+    if (mpz_cmp(m, n) > 0)
+      break;
+#endif
     success = 0;
     /* If the stack is empty, we have failed. */
     if (msp == 0)
@@ -886,23 +829,27 @@ int _GMP_primality_bls(mpz_t n, int do_quick)
     primality_handle_factor(m, _GMP_primality_bls, 0);
   }
 
-  if (success) {
-    int pcount, a, proper_r;
+  /* clear mstack since we don't care about it.  Use to hold a values. */
+  while (msp-- > 0)
+    mpz_clear(mstack[msp]);
+  msp = 0;
+
+  if (success > 0) {
+    mpz_mul(t, r, r);
+    mpz_submul_ui(t, s, 8);   /* t = r^2 - 8s */
+    /* N is prime if and only if s=0 OR t not a perfect square */
+    /* So, N is a composite if s != 0 and t is perfect square */
+    if (mpz_sgn(s) != 0 && mpz_perfect_square_p(t))
+      success = -1;
+  }
+
+  if (success > 0) {
+    int pcount, a;
     int const alimit = do_quick ? 200 : 10000;
     mpz_t p, ap;
 
     mpz_init(p);
     mpz_init(ap);
-
-    proper_r = 0;
-    if (!mpz_sgn(s)) {
-      proper_r = 1;
-    } else {
-      mpz_mul(t, r, r);
-      mpz_submul_ui(t, s, 8);   /* t = r^2 - 8s */
-      if ( ! mpz_perfect_square_p(t) )
-        proper_r = 1;
-    }
 
     for (pcount = 0; success && pcount < fsp; pcount++) {
       PRIME_ITERATOR(iter);
@@ -922,22 +869,28 @@ int _GMP_primality_bls(mpz_t n, int do_quick)
         if (mpz_cmp_ui(t, 1) != 0)
           continue;
         success = 1;   /* We found an a for this p */
+        mpz_init_set(mstack[msp++], ap);
       }
       prime_iterator_destroy(&iter);
     }
-
-    /* If all cases hold then n is prime if and only if proper_r */
-    if ( success && !proper_r )
-      success = -1;
     mpz_clear(p);
     mpz_clear(ap);
   }
-  while (msp-- > 0) {
-    mpz_clear(mstack[msp]);
+  if (success > 0 && prooftextptr != 0 && *prooftextptr != 0) {
+    int i;
+    if (fsp != msp) croak("Different f and a counts\n");
+    *prooftextptr += gmp_sprintf(*prooftextptr, "%Zd :", n);
+    for (i = 0; i < fsp; i++)
+      *prooftextptr += gmp_sprintf(*prooftextptr, " %Zd", fstack[i]);
+    *prooftextptr += gmp_sprintf(*prooftextptr, " :");
+    for (i = 0; i < msp; i++)
+      *prooftextptr += gmp_sprintf(*prooftextptr, " %Zd", mstack[i]);
+    *prooftextptr += gmp_sprintf(*prooftextptr, "\n");
   }
-  while (fsp-- > 0) {
+  while (fsp-- > 0)
     mpz_clear(fstack[fsp]);
-  }
+  while (msp-- > 0)
+    mpz_clear(mstack[msp]);
   mpz_clear(nm1);
   mpz_clear(A);
   mpz_clear(B);
@@ -1202,7 +1155,7 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
   mpz_init(savea);
   mpz_init(t);
 
-  if (_verbose>2) gmp_printf("# trying %Zd  with B=%lu\n", n, (unsigned long)B1);
+  if (_verbose>2) gmp_printf("# p-1 trying %Zd (B1=%lu B2=%lu)\n", n, (unsigned long)B1, (unsigned long)B2);
 
   /* STAGE 1
    * Montgomery 1987 p249-250 and Brent 1990 p5 both indicate we can calculate
@@ -1296,7 +1249,6 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
     mpz_t precomp_bm[111];
     int   is_precomp[111] = {0};
 
-    if (_verbose>2) gmp_printf("# Starting second stage from %lu to %lu\n", (unsigned long)B1, (unsigned long)B2);
     mpz_init(bmdiff);
     mpz_init_set(bm, a);
     mpz_init_set_ui(b, 1);
@@ -1352,7 +1304,6 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
       if (is_precomp[j])
         mpz_clear(precomp_bm[j]);
     }
-    if (_verbose>2) gmp_printf("# End second stage\n");
     if ( (mpz_cmp_ui(f, 1) != 0) && (mpz_cmp(f, n) != 0) )
       goto end_success;
   }
@@ -1364,8 +1315,11 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
     mpz_clear(a);
     mpz_clear(savea);
     mpz_clear(t);
-    if ( (mpz_cmp_ui(f, 1) != 0) && (mpz_cmp(f, n) != 0) )
+    if ( (mpz_cmp_ui(f, 1) != 0) && (mpz_cmp(f, n) != 0) ) {
+      if (_verbose>2) gmp_printf("# p-1: %Zd\n", f);
       return 1;
+    }
+    if (_verbose>2) gmp_printf("# p-1: no factor\n");
     mpz_set(f, n);
     return 0;
 }

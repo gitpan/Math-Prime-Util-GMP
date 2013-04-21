@@ -28,4 +28,4 @@ requires:
 resources:
   homepage: https://github.com/danaj/Math-Prime-Util-GMP
   repository: https://github.com/danaj/Math-Prime-Util-GMP
-version: 0.08
+version: 0.09

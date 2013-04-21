@@ -401,12 +401,13 @@ static void ec_mult(UV k, mpz_t x, mpz_t z)
    __mpz_struct *xA, *zA, *xB, *zB, *xC, *zC, *xT, *zT, *xT2, *zT2, *t;
 
    static double const v[] =
-     {1.61803398875, 1.72360679775, 1.618347119656, 1.617914406529};
+     {1.61803398875, 1.72360679775, 1.618347119656, 1.617914406529,
+      1.58017872826};
 
    /* chooses the best value of v */
    r = ADD * k;
    i = 0;
-   for (d = 0; d < 4; d++) {
+   for (d = 0; d < 5; d++) {
      e = lucas_cost(k, v[d]);
      if (e < r) { r = e;  i = d; }
    }
@@ -575,6 +576,7 @@ int _GMP_ecm_factor_projective(mpz_t n, mpz_t f, UV B1, UV ncurves)
   UV B2 = 100*B1;  /* time(S1) == time(S2) ~ 125 */
   int found = 0;
   gmp_randstate_t* p_randstate = _GMP_get_randstate();
+  int _verbose = _GMP_get_verbose();
 
   TEST_FOR_2357(n, f);
 
@@ -585,6 +587,8 @@ int _GMP_ecm_factor_projective(mpz_t n, mpz_t f, UV B1, UV ncurves)
 #ifdef USE_PRAC
   mpz_init(x3);  mpz_init(z3);  mpz_init(x4);  mpz_init(z4);
 #endif
+
+  if (_verbose>2) gmp_printf("# ecm trying %Zd (B1=%lu B2=%lu ncurves=%lu)\n", n, (unsigned long)B1, (unsigned long)B2, (unsigned long)ncurves);
 
   for (curve = 0; curve < ncurves; curve++) {
     PRIME_ITERATOR(iter);
@@ -668,7 +672,10 @@ int _GMP_ecm_factor_projective(mpz_t n, mpz_t f, UV B1, UV ncurves)
 
     if (found) { if (!mpz_cmp(f, n)) { found = 0; continue; } break; }
   }
-  /* if (found) gmp_printf("S%d\n", found); */
+  if (_verbose>2) {
+    if (found) gmp_printf("# ecm: %Zd in stage %d\n", f, found);
+    else       gmp_printf("# ecm: no factor\n");
+  }
 
   mpz_clear(ecn);
   mpz_clear(x);   mpz_clear(z);   mpz_clear(a);   mpz_clear(b);

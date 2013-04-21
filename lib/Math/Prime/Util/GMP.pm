@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.08';
+  $Math::Prime::Util::GMP::VERSION = '0.09';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -15,6 +15,7 @@ our @EXPORT_OK = qw(
                      is_prime
                      is_prob_prime
                      is_provable_prime
+                     is_provable_prime_with_cert
                      is_aks_prime
                      is_strong_pseudoprime
                      is_strong_lucas_pseudoprime
@@ -78,6 +79,40 @@ sub is_strong_pseudoprime {
   1;
 }
 
+sub is_provable_prime {
+  my ($n) = @_;
+  return 0 if $n < 2;
+  return _is_provable_prime($n);
+}
+
+sub is_provable_prime_with_cert {
+  my ($n) = @_;
+  my @composite = (0, []);
+  return @composite if $n < 2;
+
+  my ($result, $text) = _is_provable_prime($n, 1);
+  return @composite if $result == 0;
+  return ($result, [$n]) if !defined $text || $text eq '';
+
+  my %parts;
+  foreach my $part (split(/\n/, $text)) {
+    $part =~ /^(\d+) : (.*) : (.*)$/ or croak "is_provable_prime: Parsing error\n";
+    my($fn, $fstr, $astr) = ($1, $2, $3);
+    my @f = split(/ /, $fstr);
+    my @a = split(/ /, $astr);
+    # Sort f values after linking with associated a.
+    my @fa = sort {$a->[0] <=> $b->[0]}
+             map { [$f[$_],$a[$_]] }
+             0 .. $#f;
+    @f = map { defined $parts{$_} ? $parts{$_} : $_ }
+         map { $_->[0] } @fa;
+    @a = map { $_->[1] } @fa;
+    $parts{$fn} = [$fn, "n-1", [@f], [@a]];
+  }
+  return @composite if !defined $parts{$n};
+  return ($result, $parts{$n});
+}
+
 sub factor {
   my ($n) = @_;
   return ($n) if $n < 4;
@@ -134,7 +169,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.08
+Version 0.09
 
 
 =head1 SYNOPSIS
@@ -238,7 +273,7 @@ larger than C<2^64>, some additional tests are performed on probable primes
 to see if they can be proven by another means.
 
 Currently the method used once numbers have been marked probably
-prime by BPSW is the BLS75 method: Brillhart, Lehmer, and Selfridge's
+prime by BPSW is the BLS75 n-1 method: Brillhart, Lehmer, and Selfridge's
 improvement to the Pocklington-Lehmer primality test.  The test requires
 factoring C<n-1> to C<(n/2)^(1/3)>, compared to C<n^(1/2)> of the standard
 Pocklington-Lehmer or PPBLS test, or a complete factoring for the Lucas
@@ -255,9 +290,29 @@ Takes a positive number as input and returns back either 0 (composite),
 taken to return either 0 or 2 for all numbers.
 
 The current method is the BLS75 algorithm as described in C<is_prime>,
-but using much more aggressive factoring.  Planned enhancements for a later
-release include using a faster method (e.g. APRCL or ECPP), and the ability
-to return a certificate.
+but using much more aggressive factoring.  A later version will include
+a faster method for large numbers (ECPP).  A certificate can be obtained
+along with the result using the L</is_provable_prime_with_cert> method.
+
+
+=head2 is_provable_prime_with_cert
+
+Takes a positive number as input and returns back an array with two elements.
+The result will be one of:
+
+  (0, [])      The input is composite.
+
+  (1, [])      The input is probably prime but we could not prove it.
+               This is a failure in our ability to factor some necessary
+               element in a reasonable time, not a significant proof
+               failure.
+
+  (2, [cert] ) The input is prime, and the certificate contains all the
+               information necessary to verify this.
+
+The certificate can be run through the L<Math::Prime::Util/verify_prime>
+function of L<Math::Prime::Util> for verification.  The current implementation
+will return a "n-1" type certificate from the BLS75 test.
 
 
 =head2 is_strong_pseudoprime
@@ -314,7 +369,7 @@ base 2 being the other half).
 Takes a positive number as input, and returns 1 if the input passes the
 Agrawal-Kayal-Saxena (AKS) primality test.  This is a deterministic
 unconditional primality test which runs in polynomial time for general input.
-In practice, the BLS75 method used by is_provable_prime is much faster.
+In practice, the BLS75 n-1 method used by is_provable_prime is much faster.
 
 
 =head2 primes
