@@ -16,6 +16,11 @@ small_factor.h
 small_factor.c
 ecm.h
 ecm.c
+class_poly_data.h
+bls75.h
+bls75.c
+ecpp.h
+ecpp.c
 simpqs.h
 simpqs.c
 utility.h
@@ -35,6 +40,7 @@ t/50-factoring.t
 t/90-release-perlcritic.t
 t/91-release-pod-syntax.t
 t/92-release-pod-coverage.t
+t/93-release-spelling.t
 examples/bench-mp-psrp.pl
 .travis.yml
 META.yml                                 Module YAML meta-data (added by MakeMaker)

@@ -12,6 +12,8 @@
 #include "small_factor.h"
 #include "ecm.h"
 #include "simpqs.h"
+#include "bls75.h"
+#include "ecpp.h"
 #define _GMP_ECM_FACTOR _GMP_ecm_factor_projective
 
 /* Instead of trying to suck in lots of Math::BigInt::GMP and be terribly
@@ -147,17 +149,15 @@ _is_provable_prime(IN char* strn, IN int wantproof = 0)
       result = _GMP_is_provable_prime(n, 0);
       XPUSHs(sv_2mortal(newSViv( result )));
     } else {
-      char* prooftext;
-      int nbytes = 1024;
-      int ndig = mpz_sizeinbase(n, 10);
-      if (ndig > 64) {
-        nbytes += (3*ndig) * (ndig-64);
-      }
-      Newz(0, prooftext, nbytes, char);
-      result = _GMP_is_provable_prime(n, prooftext);
+      char* prooftext = 0;
+      result = _GMP_is_provable_prime(n, &prooftext);
       XPUSHs(sv_2mortal(newSViv( result )));
-      XPUSHs(sv_2mortal(newSVpv(prooftext, 0)));
-      Safefree(prooftext);
+      if (prooftext) {
+        XPUSHs(sv_2mortal(newSVpv(prooftext, 0)));
+        Safefree(prooftext);
+      } else {
+        XPUSHs(sv_2mortal(newSVpv("", 0)));
+      }
     }
     mpz_clear(n);
 
@@ -168,6 +168,28 @@ is_aks_prime(IN char* strn)
   CODE:
     PRIMALITY_START("is_aks_prime", 2);
     RETVAL = _GMP_is_aks_prime(n);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
+int
+is_nminus1_prime(IN char* strn)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    PRIMALITY_START("is_nminus1_prime", 2);
+    RETVAL = _GMP_primality_bls_nm1(n, 100, 0);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
+int
+is_ecpp_prime(IN char* strn)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    PRIMALITY_START("is_ecpp_prime", 2);
+    RETVAL = _GMP_ecpp(n, 0);
     mpz_clear(n);
   OUTPUT:
     RETVAL
