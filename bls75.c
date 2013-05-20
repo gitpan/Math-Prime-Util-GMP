@@ -113,6 +113,23 @@
     } \
   }
 
+#define INNER_QS_FACTOR(qn, primality_func) \
+  { \
+    mpz_t farray[66]; \
+    int i, nfactors; \
+    for (i = 0; i < 66; i++)  mpz_init(farray[i]); \
+    nfactors = _GMP_simpqs(qn, farray); \
+    /* Insert all found factors */ \
+    if (nfactors > 1) { \
+      success = 1; \
+      for (i = 0; i < nfactors; i++) \
+        primality_handle_factor(farray[i], primality_func, 0); \
+    } \
+    for (i = 0; i < 66; i++)  mpz_clear(farray[i]); \
+    if (success) \
+      continue; \
+  }
+
 #if 0
 int _GMP_primality_pocklington(mpz_t n, int do_quick)
 {
@@ -289,7 +306,11 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
   int fsp = 0;
   int success = 1;
   int theorem7 = 0;
+#if BLS_THEOREM7
+  UV B1 = 20000;
+#else
   UV B1 = 2000;
+#endif
 
   /* We need to do this for BLS */
   if (mpz_even_p(n)) return 0;
@@ -385,6 +406,12 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
       if (!success)  success = _GMP_ECM_FACTOR(m, f, 500, 30);
       if (!success)  success = _GMP_ECM_FACTOR(m, f, 2000, 20);
     }
+    if (!success && effort >= 5) {
+      /* The factor isn't trivial, but our size is relatively small.  QS. */
+      if (!success && mpz_sizeinbase(m,10)>=30 && mpz_sizeinbase(m,10)<55) {
+        INNER_QS_FACTOR(m, _GMP_primality_bls_nm1);
+      }
+    }
     if (!success && effort >= 4) {
       if (!success)  success = _GMP_pminus1_factor(m, f, 200000, 4000000);
       if (!success)  success = _GMP_ECM_FACTOR(m, f, 10000, 10);
@@ -395,11 +422,14 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
       UV newB1 = B1;
       if      (bls_theorem7_limit(n,A,B,    10000,t,f,r,s)) newB1 = 10000;
       else if (bls_theorem7_limit(n,A,B,  1000000,t,f,r,s)) newB1 = 1000000;
-      else if (bls_theorem7_limit(n,A,B,100000000,t,f,r,s)) newB1 = 100000000;
+      else if (bls_theorem7_limit(n,A,B, 10000000,t,f,r,s)) newB1 = 10000000;
       if (newB1 > B1) {
         UV tf = _GMP_trial_factor(m, B1, newB1);
         if (tf == 0) {
+          /* Put m back, restart */
           B1 = newB1;
+          mpz_init_set(mstack[msp++], m);
+          success = 1;
           continue; /* Go back to the top and we'll retest with this B1 */
         } else {
           /* Holy trial factorization, Batman! */
@@ -412,33 +442,19 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
 #endif
     if (!success && effort > 5) {  /* do here only if effort > 5 */
       /* QS.  Uses lots of memory, but finds multiple factors quickly */
-      if (!success && mpz_sizeinbase(m,10)>=30 && mpz_sizeinbase(m,2)<300) {
-            mpz_t farray[66];
-            int i, nfactors;
-            for (i = 0; i < 66; i++)
-              mpz_init(farray[i]);
-            nfactors = _GMP_simpqs(m, farray);
-            /* Insert all found factors */
-            if (nfactors > 1) {
-              success = 1;
-              for (i = 0; i < nfactors; i++) {
-                primality_handle_factor(farray[i], _GMP_primality_bls_nm1, 0);
-              }
-            }
-            for (i = 0; i < 66; i++)
-              mpz_clear(farray[i]);
-            if (success)
-              continue;
+      if (!success && mpz_sizeinbase(m,10)>=30 && mpz_sizeinbase(m,2)<270) {
+        INNER_QS_FACTOR(m, _GMP_primality_bls_nm1);
       }
     }
     if (!success && effort >= 5) {
       UV i;
-      UV B1 = 10000;
+      UV ecm_B1 = 10000;
       UV curves = 10;
+      if (_GMP_is_prob_prime(m)) croak("Internal error in BLS75\n");
       for (i = 1; i < 18; i++) {
         if ((4+i) > (UV)effort) break;
-        B1 *= 2;
-        success = _GMP_ECM_FACTOR(m, f, B1, curves);
+        ecm_B1 *= 2;
+        success = _GMP_ECM_FACTOR(m, f, ecm_B1, curves);
         if (success) break;
       }
     }
@@ -521,7 +537,7 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
     if (theorem7) {
       proofptr += gmp_sprintf(proofptr, " N-1 T7 :");
       proofptr += gmp_sprintf(proofptr, " %lu %Zd %Zd :",
-                       B1, fstack[--fsp], mstack[--msp]);
+                       (unsigned long)B1, fstack[--fsp], mstack[--msp]);
        mpz_clear(fstack[fsp]);  mpz_clear(mstack[msp]);
     } else {
       proofptr += gmp_sprintf(proofptr, " N-1 T5 :");

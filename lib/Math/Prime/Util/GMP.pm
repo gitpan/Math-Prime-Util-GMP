@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.10';
+  $Math::Prime::Util::GMP::VERSION = '0.11';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -112,7 +112,7 @@ sub is_provable_prime_with_cert {
       @a = map { $_->[1] } @fa;
       $parts{$fn} = [$fn, "n-1", [@f], [@a]];
     } elsif ($part =~ /^(\d+) : N-1 T7 : (.*) : (.*) : (.*)$/) {
-      my($fn, $t7str, $fstr, $astr) = ($1, $2, $3);
+      my($fn, $t7str, $fstr, $astr) = ($1, $2, $3, $4);
       my @t7 = split(/ /, $t7str);
       my @f = split(/ /, $fstr);
       my @a = split(/ /, $astr);
@@ -123,8 +123,8 @@ sub is_provable_prime_with_cert {
       @f = map { defined $parts{$_} ? $parts{$_} : $_ }
            map { $_->[0] } @fa;
       @a = map { $_->[1] } @fa;
-      # Theorem 7: supply [B1, B, a]
-      $parts{$fn} = [$fn, "n-1 T7", [@t7], [@f], [@a]];
+      # Theorem 7: supply ["B", B1, B, a]
+      $parts{$fn} = [$fn, "n-1", ["B", @t7], [@f], [@a]];
     } elsif ($part =~ /(\d+) : ECPP : (\d+) (\d+) (\d+) (\d+) \((\d+):(\d+)\)\s*$/) {
       my($fn, $a, $b, $m, $q, $px, $py) = ($1, $2, $3, $4, $5, $6, $7);
       push @ecpp, [$fn, $a, $b, $m, $q, [$px, $py]];
@@ -199,7 +199,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.10
+Version 0.11
 
 
 =head1 SYNOPSIS
@@ -214,7 +214,7 @@ Version 0.10
   # These return 0 for composite, 2 for prime, and 1 for probably prime
   # Numbers under 2^64 will return 0 or 2.
   # is_prob_prime does a BPSW primality test for numbers > 2^64
-  # is_prime adds a quick test to try to prove the result
+  # is_prime adds some MR tests and a quick test to try to prove the result
   # is_provable_prime will spend a lot of effort on proving primality
 
   say "$n is probably prime"    if is_prob_prime($n);
@@ -307,7 +307,7 @@ indicates "probably prime" then a small number of Miller-Rabin tests
 with random bases are performed.  For numbers under 200 bits, a quick
 BLS75 C<n-1> primality proof is attempted.  This is tuned to give up
 if the result cannot be quickly determined, and results in approximately
-50% success rate at 128-bits.
+30% success rate at 128-bits.
 
 The result is that many numbers will return back 2 (definitely prime),
 and the numbers that return 1 (probably prime) have gone through more
@@ -324,8 +324,8 @@ taken to return either 0 or 2 for all numbers.
 
 The current method first uses BPSW and a small number of Miller-Rabin
 tests with random bases to weed out composites and provide a deterministic
-answer for tiny numbers (under C<2^64>).  We then try a quick
-BLS75 n-1 test.  If that test is taking too long, then ECPP is used.
+answer for tiny numbers (under C<2^64>).  A quick BLS75 C<n-1> test is
+attempted, followed by ECPP.
 
 The time required for primes of different input sizes on a circa-2009
 workstation averages about C<3ms> for 30-digits, C<8ms> for 40-digit,
@@ -440,12 +440,12 @@ ECPP primality test.  This is the Atkin-Morain Elliptic Curve Primality
 Proving algorithm.  It is the fastest primality proving method in
 Math::Prime::Util.
 
-The implementation here uses the "factor and prove" strategy (FPS), which
-is good for numbers up to about 300 digits, and then starts getting bogged
-down in factoring.  A limited set of 477 precalculated discriminants are
-used, and for proving larger inputs having more helps a lot.  A future
-implementation will switch to the "factor all" strategy (FAS) which should
-improve performance greatly for 400+ digit numbers.
+This implementation uses a "factor all strategy" (FAS) with backtracking.
+A limited set of about 500 precalculated discriminants are used, which works
+well for inputs up to 300 digits, and for many inputs up to one thousand
+digits.  Having a larger set will help with large numbers (a set of 2650
+is available on github in the C<xt/> directory).  A future implementation
+may include code to generate class polynomials as needed.
 
 Typically you should use L</is_provable_prime> and let it decide the method.
 
@@ -791,6 +791,8 @@ programs.  If you have 1000+ digit numbers to prove, you want to use this.
 =item Jason E. Gower and Samuel S. Wagstaff, Jr, "Square Form Factorization", Mathematics of Computation, v77, 2008, pages 551-588.  L<http://homes.cerias.purdue.edu/~ssw/squfof.pdf>
 
 =item A.O.L. Atkin and F. Morain, "Elliptic Curves and primality proving", Mathematics of Computation, v61, 1993, pages 29-68.  L<http://www.ams.org/journals/mcom/1993-61-203/S0025-5718-1993-1199989-X/>
+
+=item R.G.E. Pinch, "Some Primality Testing Algorithms", June 1993.  Describes the primality testing methods used by many CAS systems and how most were compromised.  Gives recommendations for primality testing APIs.
 
 =back
 

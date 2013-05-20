@@ -1,5 +1,21 @@
 Revision history for Perl extension Math::Prime::Util::GMP
 
+0.11  20 May 2013
+
+    - is_prob_prime is faster at finding composites.
+
+    - rewrote Lucas inner loop for ~20% speedup.
+
+    - The previous two changes make is_prob_prime a bit faster, which means
+      a small speedup to almost all functions.
+
+    - Lower is_prime proving effort.  Proves ~30% of 128-bit primes instead
+      of 50%, but runs about 4x faster.
+
+    - Change ECPP to factor all strategy with backtracking.  Not much
+      difference below 200 digits, but a big help after that.  Certificates
+      are identical.
+
 0.10   7 May 2013
 
     - ECPP -- a much faster primality prover.  BLS75 n-1 works well to about

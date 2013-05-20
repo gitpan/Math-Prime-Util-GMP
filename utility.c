@@ -462,7 +462,7 @@ void polyz_set(mpz_t* pr, long* dr, mpz_t* ps, long ds)
   } while (ds-- > 0);
 }
 
-void polyz_print(const char* header, mpz_t pn, long dn)
+void polyz_print(const char* header, mpz_t* pn, long dn)
 {
   gmp_printf("%s", header);
   do { gmp_printf("%Zd ", pn[dn]); } while (dn-- > 0);
@@ -842,9 +842,8 @@ void polyz_roots_modp(mpz_t** roots, long *nroots,
   }
 
   polyz_roots(*roots, nroots, dP, pP, dP, NMOD, p_randstate);
-  /* TODO: Take this out at some point, as it could just be really bad luck.
-   * Leave in for now, because it can be a sign something is messed up. */
-  if (*nroots == 0) croak("failed to find roots\n");
+  /* This could be just really bad luck.  Let the caller handle it. */
+  /* if (*nroots == 0) croak("failed to find roots\n"); */
 
   /* Clear out space for roots we didn't find */
   for (i = *nroots; i < dP; i++)
@@ -896,6 +895,10 @@ UV* poly_class_degrees(void)
 {
   UV* dlist;
   UV d, i, max_degree, p;
+
+  for (i = 1; i < NUM_CLASS_POLYS; i++)
+    if (_class_poly_data[i].D < _class_poly_data[i-1].D)
+      croak("Problem with data file, out of order at D=%d\n", (int)_class_poly_data[i].D);
 
   New(0, dlist, NUM_CLASS_POLYS+1, UV);
   /* Inefficient */
