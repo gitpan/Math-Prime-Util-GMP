@@ -9,13 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <time.h>
 #include <gmp.h>
 
-#include "EXTERN.h"
-#include "perl.h"
-#include "XSUB.h"
-
+#include "ptypes.h"
 #include "gmp_main.h"
 #include "prime_iterator.h"
 #include "small_factor.h"
@@ -522,6 +518,10 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
       }
       prime_iterator_destroy(&iter);
     }
+    /* If we could not find 'a' values, then we should return 1 (maybe prime)
+     * since we did not perform an exhaustive search.  It would be quite
+     * unusual to find a prime that didn't have an 'a' in the first 10,000
+     * primes, but it could happen.  It's a "dubiously prime" :) */
     mpz_clear(p);
     mpz_clear(ap);
   }

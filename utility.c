@@ -7,31 +7,23 @@
 #include <stdlib.h>
 #include <gmp.h>
 
-#ifdef STANDALONE
-  typedef unsigned long UV;
-  typedef   signed long IV;
-  #define INLINE
-  #define UV_MAX ULONG_MAX
-  #define UVCONST(x) ((unsigned long)x##UL)
-  #define croak(fmt,...)            { printf(fmt,##__VA_ARGS__); exit(1); }
-  #define New(id, mem, size, type)  mem = (type*) malloc((size)*sizeof(type))
-  #define Newz(id, mem, size, type) mem = (type*) calloc(size, sizeof(type))
-  #define Safefree(mem)             free((void*)mem)
-  #define PRIME_ITERATOR(i) mpz_t i; mpz_init_set_ui(i, 2)
-  /*
-  static UV prime_iterator_next(mpz_t *iter) { mpz_nextprime(*iter, *iter); return mpz_get_ui(*iter); }
-  static void prime_iterator_destroy(mpz_t *iter) { mpz_clear(*iter); }
-  static void prime_iterator_setprime(mpz_t *iter, UV n) {mpz_set_ui(*iter, n);}
-  static int prime_iterator_isprime(mpz_t *iter, UV n) {int isp; mpz_t t; mpz_init_set_ui(t, n); isp = mpz_probab_prime_p(t, 10); mpz_clear(t); return isp;}
-  */
-#else
-  #include "EXTERN.h"
-  #include "perl.h"
-  #include "XSUB.h"
-#endif
+#include "ptypes.h"
 
 /* includes mpz_mulmod(r, a, b, n, temp) */
 #include "utility.h"
+
+static int _verbose = 0;
+int get_verbose_level(void) { return _verbose; }
+void set_verbose_level(int level) { _verbose = level; }
+
+static gmp_randstate_t _randstate;
+gmp_randstate_t* get_randstate(void) { return &_randstate; }
+void init_randstate(unsigned long seed) {
+  gmp_randinit_mt(_randstate);
+  gmp_randseed_ui(_randstate, seed);
+}
+void clear_randstate(void) {  gmp_randclear(_randstate);  }
+
 
 int mpz_divmod(mpz_t r, mpz_t a, mpz_t b, mpz_t n, mpz_t t)
 {
@@ -470,6 +462,7 @@ void polyz_print(const char* header, mpz_t* pn, long dn)
 }
 
 /* Multiply polys px and py to create new poly pr, all modulo 'mod' */
+#if 0
 void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, mpz_t mod)
 {
   long i, j;
@@ -487,11 +480,103 @@ void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, m
     mpz_mod(pr[i], pr[i], mod);
   while (*dr > 0 && mpz_sgn(pr[*dr]) == 0)  dr[0]--;
 }
+#endif
+#if 1
+void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, mpz_t mod)
+{
+  UV i, bits, r;
+  mpz_t p, p2, t;
+
+  mpz_init(p); mpz_init(p2); mpz_init(t);
+  *dr = dx+dy;
+  r = *dr+1;
+  mpz_mul(t, mod, mod);
+  mpz_mul_ui(t, t, r);
+  bits = mpz_sizeinbase(t, 2);
+  mpz_set_ui(p, 0);
+  mpz_set_ui(p2, 0);
+
+  /* Create big integers p and p2 from px and py, with padding */
+  {
+    for (i = 0; i <= dx; i++) {
+      mpz_mul_2exp(p, p, bits);
+      mpz_add(p, p, px[dx-i]);
+    }
+  }
+  if (px != py) {
+    for (i = 0; i <= dy; i++) {
+      mpz_mul_2exp(p2, p2, bits);
+      mpz_add(p2, p2, py[dy-i]);
+    }
+  }
+
+  /* Multiply! */
+  mpz_mul( p ,p, (px == py) ? p : p2 );
+
+  /* Pull out parts of result p to pr */
+  for (i = 0; i < r; i++) {
+    mpz_tdiv_r_2exp(t, p, bits);
+    mpz_tdiv_q_2exp(p, p, bits);
+    mpz_mod(pr[i], t, mod);
+  }
+
+  mpz_clear(p); mpz_clear(p2); mpz_clear(t);
+}
+#endif
+#if 0
+void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, mpz_t mod)
+{
+  UV i, bytes, r;
+  char* s;
+  mpz_t p, p2, t;
+
+  mpz_init(p); mpz_init(p2); mpz_init(t);
+  *dr = dx+dy;
+  r = *dr+1;
+  mpz_mul(t, mod, mod);
+  mpz_mul_ui(t, t, r);
+  bytes = mpz_sizeinbase(t, 256);
+  mpz_set_ui(p, 0);
+  mpz_set_ui(p2, 0);
+
+  /* Create big integers p and p2 from px and py, with padding */
+  {
+    Newz(0, s, (dx+1)*bytes, char);
+    for (i = 0; i <= dx; i++)
+      mpz_export(s + i*bytes, NULL, -1, 1, 0, 0, px[i]);
+    mpz_import(p, (dx+1)*bytes, -1, 1, 0, 0, s);
+    Safefree(s);
+  }
+  if (px != py) {
+    Newz(0, s, (dy+1)*bytes, char);
+    for (i = 0; i <= dy; i++)
+      mpz_export(s + i*bytes, NULL, -1, 1, 0, 0, py[i]);
+    mpz_import(p2, (dy+1)*bytes, -1, 1, 0, 0, s);
+    Safefree(s);
+  }
+
+  /* Multiply! */
+  mpz_mul( p ,p, (px == py) ? p : p2 );
+
+  /* Pull out parts of result p to pr */
+  {
+    Newz(0, s, r*bytes, char);
+    /* fill s with data from p */
+    mpz_export(s, NULL, -1, 1, 0, 0, p);
+    for (i = 0; i < r; i++) {
+      mpz_import(t,     bytes, -1, 1, 0, 0, s +     i*bytes);
+      mpz_mod(pr[i], t, mod);
+    }
+    Safefree(s);
+  }
+
+  mpz_clear(p); mpz_clear(p2); mpz_clear(t);
+}
+#endif
 
 /* Polynomial division.  We could do this modulo N, but most users only want
  * the quotient or remainder (not both), so let them do it themselves.
- * This is Cohen algorithm 3.1.2 "pseudo-division".
- * You may make pq = pn or pd, but not pd */
+ * This is Cohen algorithm 3.1.2 "pseudo-division". */
 void polyz_div(mpz_t *pq, mpz_t *pr, mpz_t *pn, mpz_t *pd,
                long *dq, long *dr, long dn, long dd)
 {
@@ -812,7 +897,7 @@ static void polyz_roots(mpz_t* roots, long *nroots,
 
 
 /* Algorithm 1.6.1 from Cohen, minus step 1. */
-void polyz_roots_modp(mpz_t** roots, long *nroots,
+void polyz_roots_modp(mpz_t** roots, long *nroots, long maxroots,
                       mpz_t *pP, long dP, mpz_t NMOD,
                       gmp_randstate_t* p_randstate)
 {
@@ -829,19 +914,22 @@ void polyz_roots_modp(mpz_t** roots, long *nroots,
   for (i = 0; i < dP; i++)
     mpz_init((*roots)[i]);
 
+  if (maxroots > dP || maxroots == 0)
+    maxroots = dP;
+
   /* Do degree 1 or 2 explicitly */
   if (dP == 1) {
     polyz_root_deg1( (*roots)[0], pP, NMOD );
     *nroots = 1;
     return;
   }
-  if (dP == 2) {
+  if (dP == 2 && maxroots >= 2) {
     polyz_root_deg2( (*roots)[0], (*roots)[1], pP, NMOD );
     *nroots = 2;
     return;
   }
 
-  polyz_roots(*roots, nroots, dP, pP, dP, NMOD, p_randstate);
+  polyz_roots(*roots, nroots, maxroots, pP, dP, NMOD, p_randstate);
   /* This could be just really bad luck.  Let the caller handle it. */
   /* if (*nroots == 0) croak("failed to find roots\n"); */
 
@@ -856,65 +944,73 @@ void polyz_roots_modp(mpz_t** roots, long *nroots,
 UV poly_class_poly(IV D, mpz_t**T, int* type)
 {
   UV i, j;
-  for (i = 0; i < NUM_CLASS_POLYS; i++) {
-    if ((IV)_class_poly_data[i].D > -D)
-      break;
-    if ((IV)_class_poly_data[i].D == -D) {
-      mpz_t t;
-      UV degree = _class_poly_data[i].degree;
-      int ctype = _class_poly_data[i].type;
-      const char* s = _class_poly_data[i].coefs;
-      if (type != 0) *type = ctype;
-      if (T == 0) return degree;
-      New(0, *T, degree+1, mpz_t);
-      mpz_init(t);
-      for (j = 0; j < degree; j++) {
-        unsigned char signcount = (*s++) & 0xFF;
-        unsigned char sign = signcount >> 7;
-        unsigned char count = signcount & 0x7F;
-        mpz_set_ui(t, 0);
-        while (count-- > 0) {
-          mpz_mul_2exp(t, t, 8);
-          mpz_add_ui(t, t, (unsigned long) (*s++) & 0xFF);
-        }
-        /* Cube the last coefficient of Hilbert polys */
-        if (j == 0 && ctype == 1) mpz_pow_ui(t, t, 3);
-        if (sign) mpz_neg(t, t);
-        mpz_init_set( (*T)[j], t );
-      }
-      mpz_clear(t);
-      mpz_init_set_ui( (*T)[degree], 1 );
-      return degree;
+  UV UD = -D;
+  { /* Binary search for the poly with this D */
+    UV lo = 0;
+    UV hi = NUM_CLASS_POLYS-1;
+    while (lo < hi) {
+      UV mid = (lo+hi)/2;
+      if (_class_poly_data[mid].D <= UD) { lo = mid+1; }
+      else                               { hi = mid;   }
     }
+    i = lo-1;
   }
-  if (T != 0) *T = 0;
-  return 0;
+  if (_class_poly_data[i].D != UD) { /* Not found */
+    if (T != 0)  *T = 0;
+    return 0;
+  }
+  {                                  /* Found */
+    mpz_t t;
+    UV degree = _class_poly_data[i].degree;
+    int ctype = _class_poly_data[i].type;
+    const char* s = _class_poly_data[i].coefs;
+    if (type != 0) *type = ctype;
+    if (T == 0) return degree;
+    New(0, *T, degree+1, mpz_t);
+    mpz_init(t);
+    for (j = 0; j < degree; j++) {
+      unsigned char signcount = (*s++) & 0xFF;
+      unsigned char sign = signcount >> 7;
+      unsigned char count = signcount & 0x7F;
+      mpz_set_ui(t, 0);
+      while (count-- > 0) {
+        mpz_mul_2exp(t, t, 8);
+        mpz_add_ui(t, t, (unsigned long) (*s++) & 0xFF);
+      }
+      /* Cube the last coefficient of Hilbert polys */
+      if (j == 0 && ctype == 1) mpz_pow_ui(t, t, 3);
+      if (sign) mpz_neg(t, t);
+      mpz_init_set( (*T)[j], t );
+    }
+    mpz_clear(t);
+    mpz_init_set_ui( (*T)[degree], 1 );
+    return degree;
+  }
 }
 
 UV* poly_class_degrees(void)
 {
   UV* dlist;
-  UV d, i, max_degree, p;
+  UV i;
+  int degree_offset[256] = {0};
 
   for (i = 1; i < NUM_CLASS_POLYS; i++)
     if (_class_poly_data[i].D < _class_poly_data[i-1].D)
       croak("Problem with data file, out of order at D=%d\n", (int)_class_poly_data[i].D);
 
   New(0, dlist, NUM_CLASS_POLYS+1, UV);
-  /* Inefficient */
-  max_degree = 0;
+  /* init degree_offset to total number of this degree */
   for (i = 0; i < NUM_CLASS_POLYS; i++)
-    if (_class_poly_data[i].degree > max_degree)
-      max_degree = _class_poly_data[i].degree;
-
-  p = 0;
-  for (d = 1; d <= max_degree; d++) {
-    for (i = 0; i < NUM_CLASS_POLYS; i++) {
-      if (_class_poly_data[i].degree == d) {
-        dlist[p++] = _class_poly_data[i].D;
-      }
-    }
+    degree_offset[_class_poly_data[i].degree]++;
+  /* set degree_offset to sum of this and all previous degrees. */
+  for (i = 1; i < 256; i++)
+    degree_offset[i] += degree_offset[i-1];
+  /* Fill in dlist, sorted */
+  for (i = 0; i < NUM_CLASS_POLYS; i++) {
+    int position = degree_offset[_class_poly_data[i].degree-1]++;
+    dlist[position] = _class_poly_data[i].D;
   }
-  dlist[p] = 0;
+  /* Null terminate */
+  dlist[NUM_CLASS_POLYS] = 0;
   return dlist;
 }

@@ -1,9 +1,10 @@
-Math::Prime::Util::GMP version 0.11
+Math::Prime::Util::GMP version 0.12
 
 A set of utilities related to prime numbers.  These include multiple sieving
-methods, is_prime, prime_count, nth_prime, approximations and bounds for
-the prime_count and nth prime, next_prime and prev_prime, moebius and totient
-functions, integer factoring, and more.
+methods, primality tests, primality proving methods, prime counts using
+Lehmer's method, nth_prime, approximations and bounds for the prime count
+and nth prime, next_prime and prev_prime, moebius and totient functions,
+integer factoring, and more.
 
 These use GMP directly, so should be quite fast for bignums.  This module is
 mainly intended to be used within Math::Prime::Util.
@@ -38,6 +39,17 @@ Math::BigInt::GMP or Math::GMPz then this module should have no issues.
   Fedora:     sudo yum install gmp gmp-devel
   Ubuntu:     sudo apt-get install libgmp3 libgmp3-dev
   Cygwin:     install gmp, libgmp-devel, libgmp3
+
+
+If you would like to make a standalone executable for ECPP, the easiest method
+is to run the xt/create-standalone.sh script, which will create a standalone/
+directory with Makefile and README.  You should make sure you have the large
+discrimiment set (https://github.com/danaj/Math-Prime-Util-GMP/tree/master/xt/).
+You may also simply compile it with:
+
+  gcc -O3 -fomit-frame-pointer -DSTANDALONE -DSTANDALONE_ECPP ecpp.c bls75.c \
+       ecm.c simpqs.c prime_iterator.c gmp_main.c small_factor.c utility.c \
+       -lgmp -lm  -o ecpp-dj
 
 
 DEPENDENCIES

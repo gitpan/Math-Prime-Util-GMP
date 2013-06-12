@@ -14,6 +14,7 @@
 #include "simpqs.h"
 #include "bls75.h"
 #include "ecpp.h"
+#include "utility.h"
 #define _GMP_ECM_FACTOR _GMP_ecm_factor_projective
 
 /* Instead of trying to suck in lots of Math::BigInt::GMP and be terribly
@@ -63,6 +64,8 @@ PROTOTYPES: ENABLE
 
 void
 _GMP_set_verbose(IN int v)
+  PPCODE:
+     set_verbose_level(v);
 
 void
 _GMP_init()
@@ -108,39 +111,49 @@ _GMP_miller_rabin(IN char* strn, IN char* strbase)
     mpz_init_set_str(n, strn, 10);
 
 int
-is_strong_lucas_pseudoprime(IN char* strn)
+is_lucas_pseudoprime(IN char* strn)
+  ALIAS:
+    is_strong_lucas_pseudoprime = 1
+    is_extra_strong_lucas_pseudoprime = 2
   PREINIT:
     mpz_t n;
   CODE:
     if ((strn != 0) && (strn[0] == '-') )
       croak("Parameter '%s' must be a positive integer\n", strn);
-    PRIMALITY_START("is_strong_lucas_pseudoprime", 1);
-    RETVAL = _GMP_is_strong_lucas_pseudoprime(n);
-    mpz_clear(n);
-  OUTPUT:
-    RETVAL
-
-int
-is_prob_prime(IN char* strn)
-  PREINIT:
-    mpz_t n;
-  CODE:
-    PRIMALITY_START("is_prob_prime", 2);
-    RETVAL = _GMP_is_prob_prime(n);
+    PRIMALITY_START("is_lucas_pseudoprime", 1);
+    if (ix == 2)
+      RETVAL = _GMP_is_extra_strong_lucas_pseudoprime(n);
+    else
+      RETVAL = _GMP_is_lucas_pseudoprime(n, ix);
     mpz_clear(n);
   OUTPUT:
     RETVAL
 
 int
 is_prime(IN char* strn)
+  ALIAS:
+    is_prob_prime = 1
+    is_aks_prime = 2
+    is_nminus1_prime = 3
+    is_ecpp_prime = 4
   PREINIT:
     mpz_t n;
+    int ret;
   CODE:
     PRIMALITY_START("is_prime", 2);
-    RETVAL = _GMP_is_prime(n);
+    switch (ix) {
+      case 0: ret = _GMP_is_prime(n); break;
+      case 1: ret = _GMP_is_prob_prime(n); break;
+      case 2: ret = _GMP_is_aks_prime(n); break;
+      case 3: ret = _GMP_primality_bls_nm1(n, 100, 0); break;
+      case 4: ret = _GMP_ecpp(n, 0); break;
+      default: croak("is_prime: Unknown function alias"); break;
+    }
+    RETVAL = ret;
     mpz_clear(n);
   OUTPUT:
     RETVAL
+
 
 void
 _is_provable_prime(IN char* strn, IN int wantproof = 0)
@@ -164,39 +177,6 @@ _is_provable_prime(IN char* strn, IN int wantproof = 0)
       }
     }
     mpz_clear(n);
-
-int
-is_aks_prime(IN char* strn)
-  PREINIT:
-    mpz_t n;
-  CODE:
-    PRIMALITY_START("is_aks_prime", 2);
-    RETVAL = _GMP_is_aks_prime(n);
-    mpz_clear(n);
-  OUTPUT:
-    RETVAL
-
-int
-is_nminus1_prime(IN char* strn)
-  PREINIT:
-    mpz_t n;
-  CODE:
-    PRIMALITY_START("is_nminus1_prime", 2);
-    RETVAL = _GMP_primality_bls_nm1(n, 100, 0);
-    mpz_clear(n);
-  OUTPUT:
-    RETVAL
-
-int
-is_ecpp_prime(IN char* strn)
-  PREINIT:
-    mpz_t n;
-  CODE:
-    PRIMALITY_START("is_ecpp_prime", 2);
-    RETVAL = _GMP_ecpp(n, 0);
-    mpz_clear(n);
-  OUTPUT:
-    RETVAL
 
 int
 _validate_ecpp_curve(IN char* stra, IN char* strb, IN char* strn, IN char* strpx, IN char* strpy, IN char* strm, IN char* strq)
@@ -237,24 +217,15 @@ _validate_ecpp_curve(IN char* stra, IN char* strb, IN char* strn, IN char* strpx
 
 void
 next_prime(IN char* strn)
+  ALIAS:
+    prev_prime = 1
   PREINIT:
     mpz_t n;
   PPCODE:
     VALIDATE_AND_SET("next_prime", n, strn);
 
-    _GMP_next_prime(n);
-
-    XPUSH_MPZ(n);
-    mpz_clear(n);
-
-void
-prev_prime(IN char* strn)
-  PREINIT:
-    mpz_t n;
-  PPCODE:
-    VALIDATE_AND_SET("prev_prime", n, strn);
-
-    _GMP_prev_prime(n);
+    if (ix == 0) _GMP_next_prime(n);
+    else         _GMP_prev_prime(n);
 
     XPUSH_MPZ(n);
     mpz_clear(n);
@@ -524,7 +495,7 @@ _GMP_factor(IN char* strn)
       do { /* loop over each remaining factor */
         while ( mpz_cmp_ui(n, TRIAL_LIM*TRIAL_LIM) > 0 && !_GMP_is_prob_prime(n) ) {
           int success = 0;
-          int o = _GMP_get_verbose();
+          int o = get_verbose_level();
           UV B1 = 5000;
 
           /*
@@ -652,7 +623,7 @@ _GMP_factor(IN char* strn)
           /* Our method of last resort: ECM with high bmax and many curves*/
           if (!success) {
             UV i;
-            if (_GMP_get_verbose()) gmp_printf("starting large ECM on %Zd\n",n);
+            if (get_verbose_level()) gmp_printf("starting large ECM on %Zd\n",n);
             B1 *= 8;
             for (i = 0; i < 10; i++) {
               success = _GMP_ECM_FACTOR(n, f, B1, 100);
