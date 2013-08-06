@@ -29,19 +29,17 @@
   I have this running, but for small numbers it doesn't matter much, and for
   large numbers it just highlights how much nicer FAS would be.
 
-- ECPP: with FAS, we're printing the N[i] results backwards.
+- ECPP: If we are in step M, saying "for this N, if Q is prime then N is
+  prime", and Q comes back from downrun as composite, then we should
+    1: Run more compositeness tests (e.g. frobenius_underwood or some m-rs)
+    2: Continue on trying to find a different Q.
+  This does not automatically mean N is composite (though it would indicate
+  we found a BPSW counterexample).  Make sure we're doing the right thing.
 
-- Better output for standalone ECPP.
+- ECPP: All discriminants with D % 8 != 3 have been converted to Weber.  We're
+  still left with lots of those D values.  Figure out a different invariant
+  that will make smaller polynomials, along with a root conversion.
 
-- Convert ECPP output (prooftext or reverse NabmqP output) to Primo format.
-  Looks like that isn't possible without completely changing our method of
-  choosing curves and points.  Primo uses (type 3):
-    A, B, T where these are usually numbers smaller than ~30
-    L = (T^3 + AT + B) % N
-    A = (A * L^2) mod N
-    B = (B * L^3) mod N
-    X = TL mod N
-    Y = L^2 mod N
-  Type 4 uses a single parameter J instead of A and B.  The calculations for
-  curve and point selection could be modified to do this style perhaps.  It
-  would definitely be a change from the Cohen or Crandall/Pomerance methods.
+- ECPP: Add a fast BLS5 to downrun?
+
+- Add BLS17 proof.  Merge into BLS5 code since the end is the same.

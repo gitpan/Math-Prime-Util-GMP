@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.12';
+  $Math::Prime::Util::GMP::VERSION = '0.13';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -23,6 +23,9 @@ our @EXPORT_OK = qw(
                      is_lucas_pseudoprime
                      is_strong_lucas_pseudoprime
                      is_extra_strong_lucas_pseudoprime
+                     is_almost_extra_strong_lucas_pseudoprime
+                     is_frobenius_underwood_pseudoprime
+                     lucas_sequence
                      primes
                      next_prime
                      prev_prime
@@ -30,6 +33,7 @@ our @EXPORT_OK = qw(
                      prho_factor
                      pbrent_factor
                      pminus1_factor
+                     pplus1_factor
                      holf_factor
                      squfof_factor
                      ecm_factor
@@ -91,59 +95,16 @@ sub is_provable_prime {
 
 sub is_provable_prime_with_cert {
   my ($n) = @_;
-  my @composite = (0, []);
+  my @composite = (0, '');
   return @composite if $n < 2;
 
   my ($result, $text) = _is_provable_prime($n, 1);
   return @composite if $result == 0;
-  return ($result, [$n]) if !defined $text || $text eq '';
-
-  my %parts;
-  my @ecpp;
-  foreach my $part (split(/\n/, $text)) {
-    if ($part =~ /^(\d+) : N-1 T5 : (.*) : (.*)$/) {
-      my($fn, $fstr, $astr) = ($1, $2, $3);
-      my @f = split(/ /, $fstr);
-      my @a = split(/ /, $astr);
-      # Sort f values after linking with associated a.
-      my @fa = sort {$a->[0] <=> $b->[0]}
-               map { [$f[$_],$a[$_]] }
-               0 .. $#f;
-      @f = map { defined $parts{$_} ? $parts{$_} : $_ }
-           map { $_->[0] } @fa;
-      @a = map { $_->[1] } @fa;
-      $parts{$fn} = [$fn, "n-1", [@f], [@a]];
-    } elsif ($part =~ /^(\d+) : N-1 T7 : (.*) : (.*) : (.*)$/) {
-      my($fn, $t7str, $fstr, $astr) = ($1, $2, $3, $4);
-      my @t7 = split(/ /, $t7str);
-      my @f = split(/ /, $fstr);
-      my @a = split(/ /, $astr);
-      # Sort f values after linking with associated a.
-      my @fa = sort {$a->[0] <=> $b->[0]}
-               map { [$f[$_],$a[$_]] }
-               0 .. $#f;
-      @f = map { defined $parts{$_} ? $parts{$_} : $_ }
-           map { $_->[0] } @fa;
-      @a = map { $_->[1] } @fa;
-      # Theorem 7: supply ["B", B1, B, a]
-      $parts{$fn} = [$fn, "n-1", ["B", @t7], [@f], [@a]];
-    } elsif ($part =~ /(\d+) : ECPP : (\d+) (\d+) (\d+) (\d+) \((\d+):(\d+)\)\s*$/) {
-      my($fn, $a, $b, $m, $q, $px, $py) = ($1, $2, $3, $4, $5, $6, $7);
-      push @ecpp, [$fn, $a, $b, $m, $q, [$px, $py]];
-    } else {
-      croak "is_provable_prime: Parsing error on '$part'\n";
-    }
-  }
-  my @cert;
-  if (scalar @ecpp > 0) {
-    my @cert = ($n, "ECPP", @ecpp);
-    # Check to see if the last q was proven via n-1
-    my $lastq = $ecpp[-1]->[4];
-    $ecpp[-1]->[4] = $parts{$lastq} if defined $parts{$lastq};
-    return ($result, [@cert]);
-  }
-  return @composite if !defined $parts{$n};
-  return ($result, $parts{$n});
+  return ($result, '') if $result != 2;
+  $text = "Type Small\n$n\n" if !defined $text || $text eq '';
+  $text =~ s/\n$//;
+  $text = "[MPU - Primality Certificate]\nVersion 1.0\n\nProof for:\nN $n\n\n$text";
+  return ($result, $text);
 }
 
 sub factor {
@@ -201,7 +162,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.12
+Version 0.13
 
 
 =head1 SYNOPSIS
@@ -226,6 +187,7 @@ Version 0.12
   # Miller-Rabin and strong Lucas-Selfridge pseudoprime tests
   say "$n is a prime or spsp-2/7/61" if is_strong_pseudoprime($n, 2, 7, 61);
   say "$n is a prime or slpsp"       if is_strong_lucas_pseudoprime($n);
+  say "$n is a prime or eslpsp"      if is_extra_strong_lucas_pseudoprime($n);
 
   # Return array reference to primes in a range.
   my $aref = primes( 10 ** 200, 10 ** 200 + 10000 );
@@ -271,6 +233,12 @@ strings (for bigints).  L<Math::Prime::Util> tries to reconvert
 all strings back into the callers bigint type if possible, which makes it more
 convenient for calculations.
 
+The various C<is_*_pseudoprime> tests are more appropriately called
+C<is_*_probable_prime> or C<is_*_prp>.  They return 1 if the input is a
+probable prime based on their test.  The naming convention is historical
+and follows Pari and some other math packages.  The modern definition of
+pseudoprime is a I<composite> that passes the test, rather than any number.
+
 
 =head1 FUNCTIONS
 
@@ -282,21 +250,23 @@ convenient for calculations.
 Takes a positive number as input and returns back either 0 (composite),
 2 (definitely prime), or 1 (probably prime).
 
-For inputs below C<2^64> a deterministic test is performed, so the possible
-return values are 0 (composite) or 2 (definitely prime).
+For inputs below C<2^64> the test is deterministic, so the possible return
+values are 0 (composite) or 2 (definitely prime).
 
 For inputs above C<2^64>, a probabilistic test is performed.  Only 0 (composite)
-and 1 (probably prime) are returned.  The current implementation uses a strong
-Baillie-PSW test.  There is a possibility that composites may be returned
-marked prime, but since the test was published in 1980, not a single BPSW
-pseudoprime has been found, so it is extremely likely to be prime.
+and 1 (probably prime) are returned.  The current implementation uses the
+Baillie-PSW (BPSW) test.  There is a possibility that composites may be
+returned marked prime, but since the test was published in 1980, not a
+single BPSW pseudoprime has been found, so it is extremely likely to be prime.
 While we believe (Pomerance 1984) that an infinite number of counterexamples
 exist, there is a weak conjecture (Martin) that none exist under 10000 digits.
 
-In more detail, this implements the strong BPSW test as outlined in Baillie
-and Wagstaff (1980), using the method A (Selfridge) parameters and the strong
-Fermat PRP test and the strong Lucas PRP test.  Using Jan Feitsma's PSP-2
-database, this has been verified to produce no false results under C<2^64>.
+In more detail, we are using the extra-strong Lucas test (Grantham 2000)
+using the Baillie parameter selection method (see OEIS A217719).  Previous
+versions of this module used the strong Lucas test with Selfridge parameters,
+but the extra-strong version produces fewer pseudoprimes while running
+1.2 - 1.5x faster.  It is slightly stronger than the test used in
+L<Pari|http://pari.math.u-bordeaux.fr/faq.html#primetest>.
 
 
 =head2 is_prime
@@ -316,7 +286,7 @@ BLS75 C<n-1> primality proof is attempted.  This is tuned to give up
 if the result cannot be quickly determined, and results in approximately
 30% success rate at 128-bits.
 
-The result is that many numbers will return back 2 (definitely prime),
+The result is that many numbers will return 2 (definitely prime),
 and the numbers that return 1 (probably prime) have gone through more
 tests than L</is_prob_prime> while not taking too long.
 
@@ -335,8 +305,8 @@ answer for tiny numbers (under C<2^64>).  A quick BLS75 C<n-1> test is
 attempted, followed by ECPP.
 
 The time required for primes of different input sizes on a circa-2009
-workstation averages about C<3ms> for 30-digits, C<8ms> for 40-digit,
-C<30ms> for 60-digit, C<75ms> for 80-digit, C<200ms> for 100-digit,
+workstation averages about C<3ms> for 30-digits, C<5ms> for 40-digit,
+C<20ms> for 60-digit, C<50ms> for 80-digit, C<100ms> for 100-digit,
 C<2s> for 200-digit, and 400-digit inputs about a minute.
 Expect a lot of time variation for larger inputs.  You can see progress
 indication if verbose is turned on (some at level 1, and a lot at level 2).
@@ -350,21 +320,26 @@ L</is_provable_prime_with_cert> method.
 Takes a positive number as input and returns back an array with two elements.
 The result will be one of:
 
-  (0, [])      The input is composite.
+  (0, '')      The input is composite.
 
-  (1, [])      The input is probably prime but we could not prove it.
+  (1, '')      The input is probably prime but we could not prove it.
                This is a failure in our ability to factor some necessary
                element in a reasonable time, not a significant proof
-               failure.
+               failure (in other words, it remains a probable prime).
 
-  (2, [cert] ) The input is prime, and the certificate contains all the
+  (2, '...')   The input is prime, and the certificate contains all the
                information necessary to verify this.
 
-The certificate can be run through the L<Math::Prime::Util/verify_prime>
-function of L<Math::Prime::Util> for verification.  The current implementation
-will return either certificates of either "n-1" type, "ECPP" type, or a
-mix of the two (e.g. ECPP ended with n-1 for the final number).
+The certificate is a text representation containing all the necessary
+information to verify the primality of the input in a reasonable time.
+The result can be used with L<Math::Prime::Util/verify_prime> for
+verification.  Proof types used include:
 
+  ECPP
+  BLS3
+  BLS15
+  BLS5
+  Small
 
 =head2 is_strong_pseudoprime
 
@@ -373,12 +348,13 @@ mix of the two (e.g. ECPP ended with n-1 for the final number).
 
 Takes a positive number as input and one or more bases.  Returns 1 if the
 input is a prime or a strong pseudoprime to all of the bases, and 0 if not.
-The base must be a positive integer.
+The base must be a positive integer.  This is often called the Miller-Rabin
+test.
 
 If 0 is returned, then the number really is a composite.  If 1 is returned,
 then it is either a prime or a strong pseudoprime to all the given bases.
 Given enough distinct bases, the chances become very strong that the number
-number is actually prime.
+is actually prime.
 
 Both the input number and the bases may be big integers.  If base modulo n
 E<lt>= 1 or base modulo n = n-1, then the result will be 1.  This allows the
@@ -395,7 +371,9 @@ tests (e.g. the strong BPSW test) or deterministic results for numbers less
 than some verified limit (e.g. Jaeschke showed in 1993 that no more than three
 selected bases are required to give correct primality test results for any
 32-bit number).  Given the small chances of passing multiple bases, there
-are some math packages that just use multiple MR tests for primality testing.
+are some math packages that just use multiple MR tests for primality testing,
+though in the early 1990s almost all serious software switched to the
+BPSW test.
 
 Even numbers other than 2 will always return 0 (composite).  While the
 algorithm works with even input, most sources define it only on odd input.
@@ -408,15 +386,70 @@ function.
 
 =head2 is_strong_lucas_pseudoprime
 
+Takes a positive number as input, and returns 1 if the input is a standard
+or strong Lucas probable prime.  The Selfridge method of choosing D, P, and
+Q are used (some sources call this a Lucas-Selfridge test).  This is one
+half of the BPSW primality test (the Miller-Rabin strong probable prime test
+with base 2 being the other half).  The canonical BPSW test (page 1401 of
+Baillie and Wagstaff (1980)) uses the strong Lucas test with Selfridge
+parameters, but in practice a variety of Lucas tests with different
+parameters are used by tests calling themselves BPSW.
+
+
 =head2 is_extra_strong_lucas_pseudoprime
 
-Takes a positive number as input, and returns 1 if the input is a standard,
-strong, or extra strong Lucas probable prime.  The standard and strong methods
-use the Selfridge method of choosing D, P, and Q (some sources call this
-a standard or strong Lucas-Selfridge probable prime).  This is one half
-of the BPSW primality test (the Miller-Rabin strong probable prime test with
-base 2 being the other half).  The canonical BPSW test uses the strong Lucas
-test with Selfridge parameters.
+Takes a positive number as input, and returns 1 if the input is an
+extra-strong Lucas probable prime.  This is defined in Grantham (2000),
+and is a slightly more stringent test than the strong Lucas test, though
+because different parameters are used the pseudoprimes are not a subset.
+As expected by the extra conditions, the number of pseudoprimes is less
+than 2/3 that of the strong Lucas-Selfridge test.
+Runtime performance is 1.2 to 1.5x faster than the strong Lucas test.
+
+The parameters are selected using the Baillie-OEIS method:
+
+  P = 3;
+  Q = 1;
+  while ( jacobi( P*P-4, n ) != -1 )
+    P += 1;
+
+
+=head2 is_almost_extra_strong_lucas_pseudoprime
+
+Takes a positive number as input and returns 1 if the input is an "almost"
+extra-strong Lucas probable prime.  This is the classic extra-strong Lucas
+test but without calculating the U sequence.  This makes it very fast,
+although as the input increases in size the time converges to the conventional
+extra-strong implementation:  at 30 digits this routine is about 15% faster,
+at 300 digits it is only 2% faster.
+
+With the current implementations, there is little reason to prefer this unless
+trying to reproduce specific results.  The extra-strong implementation has been
+optimized to use similar features, removing most of the performance advantage.
+
+An optional second argument (must be between 1 and 256) indicates the
+increment amount for P parameter selection.  The default value of one yields
+the method described in L</is_extra_strong_lucas_pseudoprime>.  A value of
+2 yields the method used in
+L<Pari|http://pari.math.u-bordeaux.fr/faq.html#primetest>.
+
+Because the C<U = 0> condition is ignored, this produces about 5% more
+pseudoprimes than the extra-strong Lucas test.  However this is still only
+66% of the number produced by the strong Lucas-Selfridge test.  No BPSW
+counterexamples have been found with any of the Lucas tests described.
+
+
+=head2 is_frobenius_underwood_pseudoprime
+
+Takes a positive number as input, and returns 1 if the input passes the minimal
+lambda+2 test (see Underwood 2012 "Quadratic Compositeness Tests"), where
+C<(L+2)^(n-1) = 5 + 2x mod (n, L^2 - Lx + 1)>.  There are no known
+counterexamples, but this is not a well studied test.
+
+The computational cost is about 2.5x the cost of a strong pseudoprime test
+(this will vary somewhat with platform and input size).  It is typically a
+little slower than an extra-strong Lucas test, and faster than a strong
+Lucas test.
 
 
 =head2 is_aks_prime
@@ -484,7 +517,8 @@ may use a multi-segmented sieve when appropriate.
 
   $n = next_prime($n);
 
-Returns the next prime greater than the input number.
+Returns the next prime greater than the input number.  The function
+L</is_prob_prime> is used to determine when a prime is found.
 
 
 =head2 prev_prime
@@ -492,7 +526,25 @@ Returns the next prime greater than the input number.
   $n = prev_prime($n);
 
 Returns the prime smaller than the input number.  0 is returned if the
-input is C<2> or lower.
+input is C<2> or lower.  The function L</is_prob_prime> is used to
+determine when a prime is found.
+
+
+=head2 lucas_sequence
+
+  my($U, $V, $Qk) = lucas_sequence($n, $P, $Q, $k)
+
+Computes C<U_k>, C<V_k>, and C<Q_k> for the Lucas sequence defined by
+C<P>,C<Q>, modulo C<n>.  The modular Lucas sequence is used in a
+number of primality tests and proofs.
+
+The following conditions must hold:
+  - C<< D = P*P - 4*Q  !=  0 >>
+  - C<< P > 0 >>
+  - C<< P < n >>
+  - C<< Q < n >>
+  - C<< k >= 0 >>
+  - C<< n >= 2 >>
 
 
 =head2 primorial
@@ -649,6 +701,20 @@ versions of L<yafu|http://sourceforge.net/projects/yafu/>, and nowhere close
 to the speed of the version included with modern GMP-ECM.
 
 
+=head2 pplus1_factor
+
+  my @factors = pplus1_factor($n);
+
+Given a positive number input, tries to discover a factor using Williams'
+C<p+1> method.  The resulting array will contain either two factors (it
+succeeded) or the original number (no factor was found).  In either case,
+multiplying @factors yields the original input.  An optional first stage
+smoothness factor (B1) may be given as the second parameter.  This will be
+the smoothness limit B1 for the first stage.
+Factoring will stop when the input is a prime, one factor has been found, or
+the algorithm fails to find a factor with the given smoothness.
+
+
 
 =head2 holf_factor
 
@@ -787,6 +853,8 @@ programs.  If you have 1000+ digit numbers to prove, you want to use this.
 
 =item Robert Baillie and Samuel S. Wagstaff, Jr., "Lucas Pseudoprimes", Mathematics of Computation, v35 n152, October 1980, pp 1391-1417.  L<http://mpqs.free.fr/LucasPseudoprimes.pdf>
 
+=item Jon Grantham, "Frobenius Pseudoprimes", Mathematics of Computation, v70 n234, March 2000, pp 873-891.  L<http://www.ams.org/journals/mcom/2001-70-234/S0025-5718-00-01197-2/>
+
 =item John Brillhart, D. H. Lehmer, and J. L. Selfridge, "New Primality Criteria and Factorizations of 2^m +/- 1", Mathematics of Computation, v29, n130, Apr 1975, pp 620-647.  L<http://www.ams.org/journals/mcom/1975-29-130/S0025-5718-1975-0384673-1/S0025-5718-1975-0384673-1.pdf>
 
 =item Richard P. Brent, "An improved Monte Carlo factorization algorithm", BIT 20, 1980, pp. 176-184.  L<http://www.cs.ox.ac.uk/people/richard.brent/pd/rpb051i.pdf>
@@ -805,7 +873,7 @@ programs.  If you have 1000+ digit numbers to prove, you want to use this.
 
 =item A.O.L. Atkin and F. Morain, "Elliptic Curves and primality proving", Mathematics of Computation, v61, 1993, pages 29-68.  L<http://www.ams.org/journals/mcom/1993-61-203/S0025-5718-1993-1199989-X/>
 
-=item R.G.E. Pinch, "Some Primality Testing Algorithms", June 1993.  Describes the primality testing methods used by many CAS systems and how most were compromised.  Gives recommendations for primality testing APIs.
+=item R.G.E. Pinch, "Some Primality Testing Algorithms", June 1993.  Describes the primality testing methods used by many CAS systems and how most were compromised.  Gives recommendations for primality testing APIs.  L<http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.33.4409>
 
 =back
 
@@ -835,7 +903,7 @@ resource to the community.
 
 Jonathan Leto and Bob Kuo, who wrote and distributed the L<Math::Primality>
 module on CPAN.  Their implementation of BPSW provided the motivation I needed
-to get it done in this module and L<Math::Prime::Util>.  I also used their
+to do it in this module and L<Math::Prime::Util>.  I also used their
 module quite a bit for testing against.
 
 Paul Zimmermann's papers and GMP-ECM code were of great value for my projective

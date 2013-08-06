@@ -14,6 +14,9 @@
 #include "utility.h"
 
 static mpz_t _bgcd;
+#define BGCD_PRIMES      168
+#define BGCD_LASTPRIME   997
+#define BGCD_NEXTPRIME  1009
 
 void _GMP_init(void)
 {
@@ -24,7 +27,7 @@ void _GMP_init(void)
   init_randstate(seed);
   prime_iterator_global_startup();
   mpz_init(_bgcd);
-  _GMP_pn_primorial(_bgcd, 168);   /* mpz_primorial_ui(_bgcd, 1000) */
+  _GMP_pn_primorial(_bgcd, BGCD_PRIMES);   /* mpz_primorial_ui(_bgcd, 1000) */
 }
 
 void _GMP_destroy(void)
@@ -32,6 +35,7 @@ void _GMP_destroy(void)
   prime_iterator_global_shutdown();
   clear_randstate();
   mpz_clear(_bgcd);
+  destroy_ecpp_gcds();
 }
 
 
@@ -131,13 +135,157 @@ int _GMP_miller_rabin(mpz_t n, mpz_t a)
   return rval;
 }
 
+/* Returns Lucas sequence  U_k mod n and V_k mod n  defined by P,Q */
+void _GMP_lucas_seq(mpz_t U, mpz_t V, mpz_t n, IV P, IV Q, mpz_t k,
+                    mpz_t Qk, mpz_t t)
+{
+  UV b = mpz_sizeinbase(k, 2);
+  IV D = P*P - 4*Q;
+
+  MPUassert( mpz_cmp_ui(n, 2) >= 0, "lucas_seq: n is less than 2" );
+  MPUassert( mpz_cmp_ui(k, 0) >= 0, "lucas_seq: k is negative" );
+  MPUassert( P >= 0 && mpz_cmp_si(n, P) >= 0, "lucas_seq: P is out of range" );
+  MPUassert( mpz_cmp_si(n, Q) >= 0, "lucas_seq: Q is out of range" );
+  MPUassert( D != 0, "lucas_seq: D is zero" );
+
+  if (mpz_cmp_ui(k, 0) <= 0) {
+    mpz_set_ui(U, 0);
+    mpz_set_ui(V, 2);
+    return;
+  }
+  mpz_set_ui(U, 1);
+  mpz_set_si(V, P);
+  mpz_set_si(Qk, Q);
+
+  if (Q == 1) {
+    /* Use the fast V method if possible.  Much faster with small n. */
+    mpz_set_si(t, P*P-4);
+    if (P > 2 && mpz_invert(t, t, n)) {
+      /* Compute V_k and V_{k+1}, then computer U_k from them. */
+      mpz_set_si(V, P);
+      mpz_init_set_si(U, P*P-2);
+      while (b > 1) {
+        b--;
+        if (mpz_tstbit(k, b-1)) {
+          mpz_mul(V, V, U);  mpz_sub_ui(V, V, P);  mpz_mod(V, V, n);
+          mpz_mul(U, U, U);  mpz_sub_ui(U, U, 2);  mpz_mod(U, U, n);
+        } else {
+          mpz_mul(U, V, U);  mpz_sub_ui(U, U, P);  mpz_mod(U, U, n);
+          mpz_mul(V, V, V);  mpz_sub_ui(V, V, 2);  mpz_mod(V, V, n);
+        }
+      }
+      mpz_mul_ui(U, U, 2);
+      mpz_submul_ui(U, V, P);
+      mpz_mul(U, U, t);
+    } else {
+      /* Fast computation of U_k and V_k, specific to Q = 1 */
+      while (b > 1) {
+        mpz_mulmod(U, U, V, n, t);     /* U2k = Uk * Vk */
+        mpz_mul(V, V, V);
+        mpz_sub_ui(V, V, 2);
+        mpz_mod(V, V, n);               /* V2k = Vk^2 - 2 Q^k */
+        b--;
+        if (mpz_tstbit(k, b-1)) {
+          mpz_mul_si(t, U, D);
+                                      /* U:  U2k+1 = (P*U2k + V2k)/2 */
+          mpz_mul_si(U, U, P);
+          mpz_add(U, U, V);
+          if (mpz_odd_p(U)) mpz_add(U, U, n);
+          mpz_fdiv_q_2exp(U, U, 1);
+                                      /* V:  V2k+1 = (D*U2k + P*V2k)/2 */
+          mpz_mul_si(V, V, P);
+          mpz_add(V, V, t);
+          if (mpz_odd_p(V)) mpz_add(V, V, n);
+          mpz_fdiv_q_2exp(V, V, 1);
+        }
+      }
+    }
+  } else {
+    while (b > 1) {
+      mpz_mulmod(U, U, V, n, t);     /* U2k = Uk * Vk */
+      mpz_mul(V, V, V);
+      mpz_submul_ui(V, Qk, 2);
+      mpz_mod(V, V, n);               /* V2k = Vk^2 - 2 Q^k */
+      mpz_mul(Qk, Qk, Qk);            /* Q2k = Qk^2 */
+      b--;
+      if (mpz_tstbit(k, b-1)) {
+        mpz_mul_si(t, U, D);
+                                    /* U:  U2k+1 = (P*U2k + V2k)/2 */
+        mpz_mul_si(U, U, P);
+        mpz_add(U, U, V);
+        if (mpz_odd_p(U)) mpz_add(U, U, n);
+        mpz_fdiv_q_2exp(U, U, 1);
+                                    /* V:  V2k+1 = (D*U2k + P*V2k)/2 */
+        mpz_mul_si(V, V, P);
+        mpz_add(V, V, t);
+        if (mpz_odd_p(V)) mpz_add(V, V, n);
+        mpz_fdiv_q_2exp(V, V, 1);
+
+        mpz_mul_si(Qk, Qk, Q);
+      }
+      mpz_mod(Qk, Qk, n);
+    }
+  }
+  mpz_mod(U, U, n);
+  mpz_mod(V, V, n);
+}
+
+static int lucas_selfridge_params(IV* P, IV* Q, mpz_t n, mpz_t t)
+{
+  IV D = 5;
+  UV Dui = (UV) D;
+  while (1) {
+    UV gcd = mpz_gcd_ui(NULL, n, Dui);
+    if ((gcd > 1) && mpz_cmp_ui(n, gcd) != 0)
+      return 0;
+    mpz_set_si(t, D);
+    if (mpz_jacobi(t, n) == -1)
+      break;
+    if (Dui == 21 && mpz_perfect_square_p(n))
+      return 0;
+    Dui += 2;
+    D = (D > 0)  ?  -Dui  :  Dui;
+    if (Dui > 1000000)
+      croak("lucas_selfridge_params: D exceeded 1e6");
+  }
+  if (P) *P = 1;
+  if (Q) *Q = (1 - D) / 4;
+  return 1;
+}
+
+static int lucas_extrastrong_params(IV* P, IV* Q, mpz_t n, mpz_t t, UV inc)
+{
+  if (inc < 1 || inc > 256)
+    croak("Invalid lucas paramater increment: %"UVuf"\n", inc);
+  UV tP = 3;
+  while (1) {
+    UV D = tP*tP - 4;
+    UV gcd = mpz_gcd_ui(NULL, n, D);
+    if (gcd > 1 && mpz_cmp_ui(n, gcd) != 0)
+      return 0;
+    mpz_set_ui(t, D);
+    if (mpz_jacobi(t, n) == -1)
+      break;
+    if (tP == (3+20*inc) && mpz_perfect_square_p(n))
+      return 0;
+    tP += inc;
+    if (tP > 65535)
+      croak("lucas_extrastrong_params: P exceeded 65535");
+  }
+  if (P) *P = (IV)tP;
+  if (Q) *Q = 1;
+  return 1;
+}
+
+
+
 /* This code was verified against Feitsma's psps-below-2-to-64.txt file.
  * is_strong_pseudoprime reduced it from 118,968,378 to 31,894,014.
  * all three variations of the Lucas test reduce it to 0.
  * The test suite should check that they generate the correct pseudoprimes.
  *
  * The standard and strong versions use the method A (Selfridge) parameters,
- * while the extra strong version uses the parameters from Grantham (2000).
+ * while the extra strong version uses Baillie's parameters from OEIS A217719.
  *
  * Using the strong version, we can implement the strong BPSW test as
  * specified by Baillie and Wagstaff, 1980, page 1401.
@@ -145,14 +293,12 @@ int _GMP_miller_rabin(mpz_t n, mpz_t a)
  * Testing on my x86_64 machine, the strong Lucas code is over 35% faster than
  * T.R. Nicely's implementation, and over 40% faster than David Cleaver's.
  */
-int _GMP_is_lucas_pseudoprime(mpz_t n, int do_strong)
+int _GMP_is_lucas_pseudoprime(mpz_t n, int strength)
 {
-  mpz_t d, U, V, Qk, T1, T2;
-  IV D;
-  UV P = 1;
-  IV Q;
-  UV s, b;
-  int rval = 0;
+  mpz_t d, U, V, Qk, t;
+  IV P, Q;
+  UV s = 0;
+  int rval;
   int _verbose = get_verbose_level();
 
   {
@@ -160,96 +306,167 @@ int _GMP_is_lucas_pseudoprime(mpz_t n, int do_strong)
     if (cmpr == 0)     return 1;  /* 2 is prime */
     if (cmpr < 0)      return 0;  /* below 2 is composite */
     if (mpz_even_p(n)) return 0;  /* multiple of 2 is composite */
-    if (mpz_perfect_square_p(n)) return 0;  /* n perfect square is composite */
   }
-  mpz_init(T1);
-  /* Determine Selfridge D, P, Q parameters */
-  {
-    UV D_ui = 5;
-    IV sign = 1;
-    while (1) {
-      UV gcd = mpz_gcd_ui(NULL, n, D_ui);
-      if ((gcd > 1) && mpz_cmp_ui(n, gcd) != 0) {
-        mpz_clear(T1);
-        return 0;
-      }
-      mpz_set_si(T1, (IV)D_ui * sign);
-      if (mpz_jacobi(T1, n) == -1)  break;
-      D_ui += 2;
-      sign = -sign;
-    }
-    D = (IV)D_ui * sign;
-  }
-  Q = (1 - D) / 4;
-  if (_verbose>3) gmp_printf("N: %Zd  D: %ld  P: %lu  Q: %ld\n", n, D, P, Q);
-  if (D != ((IV)(P*P)) - 4*Q)  croak("incorrect DPQ\n");
-  /* Now start on the Lucas sequence */
-  mpz_init(T2);
-  mpz_init_set_ui(U, 1);
-  mpz_init_set_ui(V, P);
-  mpz_init_set_si(Qk, Q);
-  mpz_init_set(d, n);   mpz_add_ui(d, d, 1);
 
-  s = mpz_scan1(d, 0);
-  if (do_strong)
+  mpz_init(t);
+  rval = (strength < 2) ? lucas_selfridge_params(&P, &Q, n, t)
+                        : lucas_extrastrong_params(&P, &Q, n, t, 1);
+  if (!rval) {
+    mpz_clear(t);
+    return 0;
+  }
+  if (_verbose>3) gmp_printf("N: %Zd  D: %ld  P: %lu  Q: %ld\n", n, P*P-4*Q, P, Q);
+
+  mpz_init(U);  mpz_init(V);  mpz_init(Qk);
+  mpz_init_set(d, n);
+  mpz_add_ui(d, d, 1);
+
+  if (strength > 0) {
+    s = mpz_scan1(d, 0);
     mpz_tdiv_q_2exp(d, d, s);
-  b = mpz_sizeinbase(d, 2);
-
-  if (_verbose>3) gmp_printf("U=%Zd  V=%Zd  Q=%Zd\n", U, V, Qk);
-  /* We assume P = 1, Q != 1. */
-  while (b > 1) {
-    mpz_mulmod(U, U, V, n, T1);     /* U2k = Uk * Vk */
-    mpz_mul(T1, V, V);
-    mpz_submul_ui(T1, Qk, 2);
-    mpz_mod(V, T1, n);              /* V2k = Vk^2 - 2 Q^k */
-    mpz_mul(Qk, Qk, Qk);            /* Q2k = Qk^2 */
-    b--;
-    if (_verbose>3) gmp_printf("U2k=%Zd  V2k=%Zd  Q2k=%Zd\n", U, V, Qk);
-    if (mpz_tstbit(d, b-1)) { /* No mods in here */
-      mpz_mul_si(T2, U, D);
-                                  /* U:  U2k+1 = (P*U2k + V2k)/2 */
-      mpz_add(T1, U, V);
-      if (mpz_odd_p(T1)) mpz_add(T1, T1, n);
-      mpz_fdiv_q_2exp(U, T1, 1);
-                                  /* V:  V2k+1 = (D*U2k + P*V2k)/2 */
-      mpz_add(T1, T2, V);
-      if (mpz_odd_p(T1)) mpz_add(T1, T1, n);
-      mpz_fdiv_q_2exp(V, T1, 1);
-                                  /* Qk:  Qk+1 = Qk * Q */
-      mpz_mul_si(Qk, Qk, Q);
-    }
-    mpz_mod(Qk, Qk, n);
-    if (_verbose>3) gmp_printf("U=%Zd  V=%Zd  Q=%Zd\n", U, V, Qk);
   }
-  mpz_mod(U, U, n);
-  mpz_mod(V, V, n);
 
-  if (!do_strong) {
+  _GMP_lucas_seq(U, V, n, P, Q, d, Qk, t);
+  mpz_clear(d);
+
+  rval = 0;
+  if (strength == 0) {
+    /* Standard checks U_{n+1} = 0 mod n. */
     rval = (mpz_sgn(U) == 0);
-  } else if ( (mpz_sgn(U) == 0) || (mpz_sgn(V) == 0) ) {
-    rval = 1;
-  } else {
-    while (s--) {
-      mpz_mul(T1, V, V);
-      mpz_submul_ui(T1, Qk, 2);
-      mpz_mod(V, T1, n);
-      if (mpz_sgn(V) == 0) {
-        rval = 1;
-        break;
+  } else if (strength == 1) {
+    if (mpz_sgn(U) == 0) {
+      rval = 1;
+    } else {
+      while (s--) {
+        if (mpz_sgn(V) == 0) {
+          rval = 1;
+          break;
+        }
+        if (s) {
+          mpz_mul(V, V, V);
+          mpz_submul_ui(V, Qk, 2);
+          mpz_mod(V, V, n);
+          mpz_mulmod(Qk, Qk, Qk, n, t);
+        }
       }
-      if (s)
-        mpz_mulmod(Qk, Qk, Qk, n, T1);
+    }
+  } else {
+    mpz_sub_ui(t, n, 2);
+    if ( mpz_sgn(U) == 0 && (mpz_cmp_ui(V, 2) == 0 || mpz_cmp(V, t) == 0) ) {
+      rval = 1;
+    } else {
+      s--;  /* The extra strong test tests r < s-1 instead of r < s */
+      while (s--) {
+        if (mpz_sgn(V) == 0) {
+          rval = 1;
+          break;
+        }
+        if (s) {
+          mpz_mul(V, V, V);
+          mpz_sub_ui(V, V, 2);
+          mpz_mod(V, V, n);
+        }
+      }
     }
   }
-  mpz_clear(d); mpz_clear(U); mpz_clear(V); mpz_clear(Qk);
-  mpz_clear(T1); mpz_clear(T2);
+  mpz_clear(Qk); mpz_clear(V); mpz_clear(U); mpz_clear(t);
   return rval;
 }
 
-int _GMP_is_extra_strong_lucas_pseudoprime(mpz_t n)
+/* Pari's clever method.  It's an extra-strong Lucas test, but without
+ * computing U_d.  This makes it faster, but yields more pseudoprimes.
+ *
+ * increment:  1 for Baillie OEIS, 2 for Pari.
+ *
+ * With increment = 1, these results will be a subset of the extra-strong
+ * Lucas pseudoprimes.  With increment = 2, we produce Pari's results (we've
+ * added the necessary GCD with D so we produce somewhat fewer).
+ */
+int _GMP_is_almost_extra_strong_lucas_pseudoprime(mpz_t n, UV increment)
 {
-  mpz_t d, U, V, T1;
-  UV D, P, Q, s, b;
+  mpz_t d, V, W, t;
+  UV P, s;
+  int rval;
+
+  {
+    int cmpr = mpz_cmp_ui(n, 2);
+    if (cmpr == 0)     return 1;  /* 2 is prime */
+    if (cmpr < 0)      return 0;  /* below 2 is composite */
+    if (mpz_even_p(n)) return 0;  /* multiple of 2 is composite */
+  }
+
+  mpz_init(t);
+  {
+    IV PP;
+    if (! lucas_extrastrong_params(&PP, 0, n, t, increment) ) {
+      mpz_clear(t);
+      return 0;
+    }
+    P = (UV) PP;
+  }
+
+  mpz_init(d);
+  mpz_add_ui(d, n, 1);
+
+  s = mpz_scan1(d, 0);
+  mpz_tdiv_q_2exp(d, d, s);
+
+  /* Calculate V_d */
+  {
+    UV b = mpz_sizeinbase(d, 2);
+    mpz_init_set_ui(V, P);
+    mpz_init_set_ui(W, P*P-2);   /* V = V_{k}, W = V_{k+1} */
+
+    while (b > 1) {
+      b--;
+      if (mpz_tstbit(d, b-1)) {
+        mpz_mul(V, V, W);
+        mpz_sub_ui(V, V, P);
+
+        mpz_mul(W, W, W);
+        mpz_sub_ui(W, W, 2);
+      } else {
+        mpz_mul(W, V, W);
+        mpz_sub_ui(W, W, P);
+
+        mpz_mul(V, V, V);
+        mpz_sub_ui(V, V, 2);
+      }
+      mpz_mod(V, V, n);
+      mpz_mod(W, W, n);
+    }
+    mpz_clear(W);
+  }
+  mpz_clear(d);
+
+  rval = 0;
+  mpz_sub_ui(t, n, 2);
+  if ( mpz_cmp_ui(V, 2) == 0 || mpz_cmp(V, t) == 0 ) {
+    rval = 1;
+  } else {
+    s--;  /* The extra strong test tests r < s-1 instead of r < s */
+    while (s--) {
+      if (mpz_sgn(V) == 0) {
+        rval = 1;
+        break;
+      }
+      if (s) {
+        mpz_mul(V, V, V);
+        mpz_sub_ui(V, V, 2);
+        mpz_mod(V, V, n);
+      }
+    }
+  }
+  mpz_clear(V); mpz_clear(t);
+  return rval;
+}
+
+/* Paul Underwood's Frobenius test.  Code derived from Paul Underwood. */
+int _GMP_is_frobenius_underwood_pseudoprime(mpz_t n)
+{
+  mpz_t temp1, temp2, result, multiplier, n_plus_1, na, x, a, b;
+  UV len;
+  IV bit;
   int rval = 0;
   int _verbose = get_verbose_level();
 
@@ -260,77 +477,71 @@ int _GMP_is_extra_strong_lucas_pseudoprime(mpz_t n)
     if (mpz_even_p(n)) return 0;  /* multiple of 2 is composite */
     if (mpz_perfect_square_p(n)) return 0;  /* n perfect square is composite */
   }
-  /* Determine parameters (Q=1) */
-  mpz_init(T1);
-  P = 3;
-  Q = 1;
-  while (1) {
-    UV gcd;
-    D = P*P - 4;
-    mpz_set_ui(T1, D);
-    gcd = mpz_gcd_ui(NULL, n, D);
-    if (gcd > 1 && mpz_cmp_ui(n, gcd) != 0) {
-      mpz_clear(T1);
-      return 0;
-    }
-    if (mpz_jacobi(T1, n) == -1)  break;
-    P++;
+
+  mpz_init(temp1); mpz_init(temp2); mpz_init(result); mpz_init(multiplier);
+  mpz_init(n_plus_1), mpz_init(na);
+  mpz_init_set_ui(x, 0);
+  mpz_init_set_ui(a, 1);
+  mpz_init_set_ui(b, 2);
+
+  mpz_add_ui(n_plus_1, n, 1);
+  len = mpz_sizeinbase(n_plus_1, 2);
+  mpz_set_si(temp1, -1);
+  while (mpz_jacobi( temp1, n ) != -1 ) {
+    mpz_add_ui( x, x, 1 );
+    mpz_mul( temp1, x, x );
+    mpz_sub_ui( temp1, temp1, 4 );
   }
-  if (_verbose>3) gmp_printf("N: %Zd  D: %lu  P: %lu  Q: %ld\n", n, D, P, Q);
-  if (D != (P*P - 4*Q))  croak("incorrect DPQ\n");
-  /* Now start on the Lucas sequence */
-  mpz_init_set_ui(U, 1);
-  mpz_init_set_ui(V, P);
-  mpz_init_set(d, n);   mpz_add_ui(d, d, 1);
-
-  s = mpz_scan1(d, 0);
-  mpz_tdiv_q_2exp(d, d, s);
-  b = mpz_sizeinbase(d, 2);
-
-  if (_verbose>3) gmp_printf("U=%Zd  V=%Zd\n", U, V);
-  /* We assume P != 1, Q == 1. */
-  while (b > 1) {
-    mpz_mulmod(U, U, V, n, T1);     /* U2k = Uk * Vk */
-    mpz_mul(V, V, V);
-    mpz_sub_ui(V, V, 2);
-    mpz_mod(V, V, n);               /* V2k = Vk^2 - 2 Q^k */
-    b--;
-    if (_verbose>3) gmp_printf("U2k=%Zd  V2k=%Zd\n", U, V);
-    if (mpz_tstbit(d, b-1)) { /* No mods in here */
-      mpz_mul_si(T1, U, D);
-                                  /* U:  U2k+1 = (P*U2k + V2k)/2 */
-      mpz_mul_ui(U, U, P);
-      mpz_add(U, U, V);
-      if (mpz_odd_p(U)) mpz_add(U, U, n);
-      mpz_fdiv_q_2exp(U, U, 1);
-                                  /* V:  V2k+1 = (D*U2k + P*V2k)/2 */
-      mpz_mul_ui(V, V, P);
-      mpz_add(V, V, T1);
-      if (mpz_odd_p(V)) mpz_add(V, V, n);
-      mpz_fdiv_q_2exp(V, V, 1);
+  mpz_add( temp1, x, x );
+  mpz_add_ui( temp1, temp1, 5 );
+  mpz_mod( result, temp1, n );
+  if (mpz_sgn(x) == 0) {
+    for (bit = len-2; bit >= 0; bit--) {
+      mpz_add( temp2, b, b );
+      mpz_mul( na, a, temp2 );
+      mpz_add( temp1, b, a );
+      mpz_sub( temp2, b, a );
+      mpz_mul( b, temp1, temp2 );
+      mpz_mod( b, b, n );
+      mpz_mod( a, na, n );
+      if ( mpz_tstbit(n_plus_1, bit) ) {
+        mpz_mul_ui( temp1, a, 2 );
+        mpz_add( na, temp1, b );
+        mpz_add( temp1, b, b );
+        mpz_sub( b, temp1, a );
+        mpz_set( a, na );
+      }
     }
-    if (_verbose>3) gmp_printf("U=%Zd  V=%Zd\n", U, V);
-  }
-  mpz_mod(U, U, n);
-  mpz_mod(V, V, n);
-
-  mpz_sub_ui(T1, n, 2);
-  if (mpz_sgn(U) == 0 && (mpz_cmp_ui(V, 2) == 0 || mpz_cmp(V, T1) == 0)) {
-    rval = 1;
-  } else if (mpz_sgn(V) == 0) {
-    rval = 1;
   } else {
-    while (s--) {
-      mpz_mul(V, V, V);
-      mpz_sub_ui(V, V, 2);
-      mpz_mod(V, V, n);
-      if (mpz_sgn(V) == 0) {
-        rval = 1;
-        break;
+    mpz_add_ui( multiplier, x, 2 );
+    for (bit = len-2; bit >= 0; bit--) {
+      mpz_mul( temp1, a, x );
+      mpz_add( temp2, b, b );
+      mpz_add( temp1, temp1, temp2 );
+      mpz_mul( na, a, temp1 );
+      mpz_add( temp1, b, a );
+      mpz_sub( temp2, b, a );
+      mpz_mul( b, temp1, temp2 );
+      mpz_mod( b, b, n );
+      mpz_mod( a, na, n );
+      if ( mpz_tstbit(n_plus_1, bit) ) {
+        mpz_mul( temp1, a, multiplier );
+        mpz_add( na, temp1, b );
+        mpz_add( temp1, b, b );
+        mpz_sub( b, temp1, a );
+        mpz_set( a, na );
       }
     }
   }
-  mpz_clear(d); mpz_clear(U); mpz_clear(V); mpz_clear(T1);
+  mpz_mod(a, a, n);
+  mpz_mod(b, b, n);
+
+  if ( mpz_cmp_ui(a, 0) == 0 && mpz_cmp(b, result) == 0 )
+    rval = 1;
+  if (_verbose>1) gmp_printf("%Zd is %s with x = %Zd\n", n, (rval) ? "probably prime" : "composite", x);
+
+  mpz_clear(temp1); mpz_clear(temp2); mpz_clear(result); mpz_clear(multiplier);
+  mpz_clear(n_plus_1), mpz_clear(na); mpz_clear(x); mpz_clear(a); mpz_clear(b);
   return rval;
 }
 
@@ -339,7 +550,7 @@ int _GMP_is_extra_strong_lucas_pseudoprime(mpz_t n)
 UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
 {
   int small_n = 0;
-  UV f;
+  UV f = 2;
   PRIME_ITERATOR(iter);
 
   if (mpz_cmp_ui(n, 4) < 0) {
@@ -353,7 +564,11 @@ UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
   if (mpz_cmp_ui(n, to_n*to_n) < 0)
     small_n = 1;
 
-  for (f = 2; f <= to_n; f = prime_iterator_next(&iter)) {
+  /* Skip forward to the next prime >= from_n */
+  while (f < from_n)
+    f = prime_iterator_next(&iter);
+
+  for (; f <= to_n; f = prime_iterator_next(&iter)) {
     if (small_n && mpz_cmp_ui(n, f*f) < 0) break;
     if (mpz_divisible_ui_p(n, f)) { prime_iterator_destroy(&iter); return f; }
   }
@@ -372,35 +587,32 @@ UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
  * 1000 bits or so.  Primality proving will get quite a bit slower as the
  * number of bits increases.
  *
- * What are these extra M-R tests getting us?  From Rabin-Monier, with random
- * bases we should have p <= 4^-t.  So one extra test gives us p = 0.25, and
- * four tests gives us p = 0.00390625.  Hence a 0.4% chance that a composite
- * will pass the tests.  But for larger k (bits in n), this estimate is very
- * conservative.  See Damgård, Landrock, and Pomerance, 1993.  Also remember
- * that BPSW is correct for k <= 64, so k will always be > 64 for this case.
- * Given a k and t, show probabilities:
- *   perl -E 'my ($k,$t)=(256,2);  say 4**(-$t);
- *     my $p1 = $k*$k*4**(2.0-sqrt($k));  say $p1**$t;
- *     if (($t == 2 && $k >= 88) || ($t >= 3 && $k >= 21 && $t <= $k/9)) {
- *        my $p2 = $k**1.5 * 2**$t * $t**-.5 * 4**(2.0-sqrt($t*$k));  say $p2;
- *     }'
+ * What are these extra M-R tests getting us?  The primary reference is
+ * Damgård, Landrock, and Pomerance, 1993.  From Rabin-Monier, with random
+ * bases we have p <= 4^-t.  So one extra test gives us p = 0.25, and four
+ * tests gives us p = 0.00390625.  But for larger k (bits in n) this is very
+ * conservative.  Since the value has passed BPSW, we are only interested in
+ * k > 64.  See the calculate-mr-probs.pl script in the xt/ directory.
  * For a 256-bit input, we get:
  *   1 test:  p < 0.000244140625
  *   2 tests: p < 0.00000000441533
  *   3 tests: p < 0.0000000000062550875
- *   4 tests: p < 0.0000000000000035527137
+ *   4 tests: p < 0.000000000000028421709
  *
- * It's even more extreme as k goes higher.
+ * It's even more extreme as k goes higher.  Also recall that this is the
+ * probability once we've somehow found a BPSW pseudoprime.
  */
 
 int _GMP_is_prob_prime(mpz_t n)
 {
+  UV log2n;
   /*  Step 1: Look for small divisors.  This is done purely for performance.
    *          It is *not* a requirement for the BPSW test. */
 
   /* If less than 1009, make trial factor handle it. */
-  if (mpz_cmp_ui(n, 1008) <= 0)
-    return _GMP_trial_factor(n, 2, 997) ? 0 : 2;
+  if (mpz_cmp_ui(n, BGCD_NEXTPRIME) < 0)
+    return _GMP_trial_factor(n, 2, BGCD_LASTPRIME) ? 0 : 2;
+
   /* Check for tiny divisors (GMP can do these really fast) */
   if ( mpz_even_p(n)
     || mpz_divisible_ui_p(n, 3)
@@ -417,8 +629,14 @@ int _GMP_is_prob_prime(mpz_t n)
       return 0;
   }
   /* No divisors under 1009 */
-  if (mpz_cmp_ui(n, 1009*1009) < 0)
+  if (mpz_cmp_ui(n, BGCD_NEXTPRIME*BGCD_NEXTPRIME) < 0)
     return 2;
+
+  /* For very large numbers, it's worth our time to do more trial division.
+   * This is a 1.3 - 2x speedup for big next_prime, for instance. */
+  log2n = mpz_sizeinbase(n,2);
+  if (log2n > 300 && _GMP_trial_factor(n, BGCD_LASTPRIME, log2n*50))
+    return 0;
 
   /*  Step 2: The BPSW test.  psp base 2 and slpsp. */
 
@@ -426,8 +644,8 @@ int _GMP_is_prob_prime(mpz_t n)
   if (_GMP_miller_rabin_ui(n, 2) == 0)
     return 0;
 
-  /* Strong Lucas-Selfridge */
-  if (_GMP_is_lucas_pseudoprime(n, 1 /*strong*/) == 0)
+  /* Extra-Strong Lucas test */
+  if (_GMP_is_lucas_pseudoprime(n, 2 /*extra strong*/) == 0)
     return 0;
 
   /* BPSW is deterministic below 2^64 */
@@ -445,19 +663,37 @@ int _GMP_is_prime(mpz_t n)
   /* We're pretty sure n is a prime since it passed the BPSW test.  Try
    * a few random M-R bases to give some extra assurance.  See discussion
    * above about number of tests.  Assuming we are choosing uniformly random
-   * bases, the caller cannot predict our random numbers (not guaranteed!),
-   * and the caller is not choosing from a subset of worst case inputs,
+   * bases and the caller cannot predict our random numbers (not guaranteed!),
    * then there is less than a 1 in 595,000 chance that a composite will pass
    * our extra tests. */
 
   if (prob_prime == 1) {
     UV ntests;
     if      (nbits <  80) ntests = 5;  /* p < .00000168 */
-    else if (nbits < 115) ntests = 4;  /* p < .00000156 */
-    else if (nbits < 200) ntests = 3;  /* p < .00000060 */
-    else                  ntests = 2;  /* p < .00000012 */
+    else if (nbits < 105) ntests = 4;  /* p < .00000156 */
+    else if (nbits < 160) ntests = 3;  /* p < .00000164 */
+    else if (nbits < 413) ntests = 2;  /* p < .00000156 */
+    else                  ntests = 1;  /* p < .00000159 */
     prob_prime = _GMP_miller_rabin_random(n, ntests);
   }
+
+  /* Using Damgård, Landrock, and Pomerance, we get upper bounds:
+   * k <=  64      p = 0
+   * k <   80      p < 7.53e-08
+   * k <  105      p < 3.97e-08
+   * k <  160      p < 1.68e-08
+   * k >= 160      p < 2.57e-09
+   * This (1) pretends the SPSP-2 is included in the random tests, (2) doesn't
+   * take into account the trial division, (3) ignores the observed
+   * SPSP-2 / Strong Lucas anti-correlation that makes the BPSW test so
+   * useful.  Hence these numbers are still extremely conservative.
+   *
+   * For an idea of how conservative we are being, we have now exceeded the
+   * tests used in Mathematica, Maple, Pari, and SAGE.  Note: Pari pre-2.3
+   * used just M-R tests.  Pari 2.3+ uses BPSW with no extra M-R checks for
+   * is_pseudoprime, but isprime uses APRCL which, being a proof, could only
+   * output a pseudoprime through a coding error.
+   */
 
   /* For small numbers, try a quick BLS75 n-1 proof. */
   if (prob_prime == 1 && nbits <= 200)
@@ -470,10 +706,9 @@ int _GMP_is_provable_prime(mpz_t n, char** prooftext)
 {
   int prob_prime = _GMP_is_prob_prime(n);
 
-  /* The primality proving algorithms tend to be VERY slow for composites,
-   * so run a few more MR tests. */
+  /* Run one more M-R test, just in case. */
   if (prob_prime == 1)
-    prob_prime = _GMP_miller_rabin_random(n, 2);
+    prob_prime = _GMP_miller_rabin_random(n, 1);
 
   /* We can choose a primality proving algorithm:
    *   AKS    _GMP_is_aks_prime       really slow, don't bother
@@ -702,15 +937,20 @@ void _GMP_prev_prime(mpz_t n)
   mpz_clear(d);
 }
 
+#define HALF_UI_WORD (UVCONST(1) << (sizeof(unsigned long)/2))
 void _GMP_pn_primorial(mpz_t prim, UV n)
 {
   UV p = 2;
   PRIME_ITERATOR(iter);
 
   mpz_set_ui(prim, 1);
-  while (n--) {
-    mpz_mul_ui(prim, prim, p);
-    p = prime_iterator_next(&iter);
+  while (n > 0) {
+    unsigned long a = 1;
+    do {
+      a *= p;
+      p = prime_iterator_next(&iter);
+    } while (--n && (a|(unsigned long)p) < HALF_UI_WORD);
+    mpz_mul_ui(prim, prim, a);
   }
   prime_iterator_destroy(&iter);
 }
@@ -882,7 +1122,7 @@ void _GMP_lcm_of_consecutive_integers(UV B, mpz_t m)
 int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
 {
   mpz_t a, savea, t;
-  UV q, saveq, j;
+  UV q, saveq, j, sqrtB1;
   int _verbose = get_verbose_level();
   PRIME_ITERATOR(iter);
 
@@ -916,7 +1156,7 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
    * up with multiple factors between GCDs, so we allow backtracking.  This
    * could also be added to stage 2, but it's far less likely to happen there.
    */
-  j = 1;
+  j = 15;
   mpz_set_ui(a, 2);
   mpz_set_ui(savea, 2);
   saveq = 2;
@@ -924,12 +1164,14 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
    * the current one ended up going to 0. */
   q = 2;
   mpz_set_ui(t, 1);
+  sqrtB1 = (UV) sqrt(B1);
   while (q <= B1) {
-    UV k, kmin;
-    k = q;
-    kmin = B1/q;
-    while (k <= kmin)
-      k *= q;
+    UV k = q;
+    if (q <= sqrtB1) {
+      UV kmin = B1/q;
+      while (k <= kmin)
+        k *= q;
+    }
     mpz_mul_ui(t, t, k);        /* Accumulate powers for a */
     if ( (j++ % 32) == 0) {
       mpz_powm(a, a, t, n);     /* a=a^(k1*k2*k3*...) mod n */
@@ -956,9 +1198,11 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
     mpz_set(a, savea);
     for (q = saveq; q <= B1; q = prime_iterator_next(&iter)) {
       UV k = q;
-      UV kmin = B1/q;
-      while (k <= kmin)
-        k *= q;
+      if (q <= sqrtB1) {
+        UV kmin = B1/q;
+        while (k <= kmin)
+          k *= q;
+      }
       mpz_powm_ui(a, a, k, n );
       mpz_sub_ui(t, a, 1);
       mpz_gcd(f, t, n);
@@ -1060,6 +1304,133 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
     if (_verbose>2) gmp_printf("# p-1: no factor\n");
     mpz_set(f, n);
     return 0;
+}
+
+static void pp1_pow(mpz_t X, mpz_t Y, unsigned long exp, mpz_t n)
+{
+  mpz_t x0;
+  unsigned long bit;
+  {
+    unsigned long v = exp;
+    unsigned long b = 1;
+    while (v >>= 1) b++;
+    bit = 1UL << (b-2);
+  }
+  mpz_init_set(x0, X);
+  mpz_mul(Y, X, X);
+  mpz_sub_ui(Y, Y, 2);
+  mpz_tdiv_r(Y, Y, n);
+  while (bit) {
+    if ( exp & bit ) {
+      mpz_mul(X, X, Y);
+      mpz_sub(X, X, x0);
+      mpz_mul(Y, Y, Y);
+      mpz_sub_ui(Y, Y, 2);
+    } else {
+      mpz_mul(Y, X, Y);
+      mpz_sub(Y, Y, x0);
+      mpz_mul(X, X, X);
+      mpz_sub_ui(X, X, 2);
+    }
+    mpz_mod(X, X, n);
+    mpz_mod(Y, Y, n);
+    bit >>= 1;
+  }
+  mpz_clear(x0);
+}
+
+int _GMP_pplus1_factor(mpz_t n, mpz_t f, UV P0, UV B1, UV B2)
+{
+  UV j, q, saveq, sqrtB1;
+  mpz_t X, Y, saveX;
+  PRIME_ITERATOR(iter);
+
+  TEST_FOR_2357(n, f);
+  if (B1 < 7) return 0;
+
+  mpz_init_set_ui(X, P0);
+  mpz_init(Y);
+  mpz_init(saveX);
+
+  /* Montgomery 1987 */
+  if (P0 == 0) {
+    mpz_set_ui(X, 7);
+    if (mpz_invert(X, X, n)) {
+      mpz_mul_ui(X, X, 2);
+      mpz_mod(X, X, n);
+    } else
+      P0 = 1;
+  }
+  if (P0 == 1) {
+    mpz_set_ui(X, 5);
+    if (mpz_invert(X, X, n)) {
+      mpz_mul_ui(X, X, 6);
+      mpz_mod(X, X, n);
+    } else
+      P0 = 2;
+  }
+  if (P0 == 2) {
+    mpz_set_ui(X, 11);
+    if (mpz_invert(X, X, n)) {
+      mpz_mul_ui(X, X, 23);
+      mpz_mod(X, X, n);
+    }
+  }
+
+  sqrtB1 = (UV) sqrt(B1);
+  j = 8;
+  q = 2;
+  saveq = q;
+  mpz_set(saveX, X);
+  while (q <= B1) {
+    UV k = q;
+    if (q <= sqrtB1) {
+      UV kmin = B1/q;
+      while (k <= kmin)
+        k *= q;
+    }
+    pp1_pow(X, Y, k, n);
+    if ( (j++ % 16) == 0) {
+      mpz_sub_ui(f, X, 2);
+      if (mpz_sgn(f) == 0)        break;
+      mpz_gcd(f, f, n);
+      if (mpz_cmp(f, n) == 0)     break;
+      if (mpz_cmp_ui(f, 1) > 0)   goto end_success;
+      saveq = q;
+      mpz_set(saveX, X);
+    }
+    q = prime_iterator_next(&iter);
+  }
+  mpz_sub_ui(f, X, 2);
+  mpz_gcd(f, f, n);
+  if (mpz_cmp_ui(X, 2) == 0 || mpz_cmp(f, n) == 0) {
+    /* Backtrack */
+    prime_iterator_setprime(&iter, saveq);
+    mpz_set(X, saveX);
+    for (q = saveq; q <= B1; q = prime_iterator_next(&iter)) {
+      UV k = q;
+      if (q <= sqrtB1) {
+        UV kmin = B1/q;
+        while (k <= kmin)
+          k *= q;
+      }
+      pp1_pow(X, Y, k, n);
+      mpz_sub_ui(f, X, 2);
+      if (mpz_sgn(f) == 0)        goto end_fail;
+      mpz_gcd(f, f, n);
+      if (mpz_cmp(f, n) == 0)     break;
+      if (mpz_cmp_ui(f, 1) > 0)   goto end_success;
+    }
+  }
+  if ( (mpz_cmp_ui(f, 1) > 0) && (mpz_cmp(f, n) != 0) )
+    goto end_success;
+  /* TODO: stage 2 */
+  end_fail:
+    mpz_set(f,n);
+  end_success:
+    prime_iterator_destroy(&iter);
+    mpz_clear(X);  mpz_clear(Y);  mpz_clear(saveX);
+    return (mpz_cmp_ui(f, 1) != 0) && (mpz_cmp(f, n) != 0);
 }
 
 int _GMP_holf_factor(mpz_t n, mpz_t f, UV rounds)

@@ -1,5 +1,41 @@
 Revision history for Perl extension Math::Prime::Util::GMP
 
+0.13  6 August 2013
+
+    [API Changes]
+      - Primality proofs now use a text certificate.  This is nicer for
+        external interaction, but is a change from previous behavior.  You
+        will need to use Math::Prime::Util 0.30 or newer.
+
+    [Functions Added]
+      - lucas_sequence
+      - is_almost_extra_strong_lucas_pseudoprime
+      - is_frobenius_underwood_pseudoprime
+      - pplus1_factor
+
+    [Enhancements]
+    - is_prob_prime now uses the extra-strong Lucas test instead of the
+      strong Lucas test.  This gives better performance.  is_prime and
+      is_provable_prime also incorporate the change.
+
+    - Added more trial division to is_prob_prime for big (100+ digit)
+      numbers.  This is a significant speedup for next_prime in many cases.
+      Pari/gp 2.6.0  nextprime(10^4000)    19 minutes
+      MPU:GMP 0.12   next_prime(10**4000)  15 minutes
+      MPU:GMP 0.13   next_prime(10**4000)   8 minutes
+
+    - ECPP now tries partial n-1 and n+1 proofs (BLS theorem 3 / 15) at each
+      step, and adds a couple additional quick factoring tests.  This mainly
+      helps lower the time variability with large inputs.
+
+    - Updated ECPP polynomials.  Should give better performance with larger
+      inputs.
+
+    [Scripts and Programs Added]
+      - convert-primo-cert.pl    convert a Primo certificate to MPU format.
+      - verify-cert.pl           Verify a Primo or MPU certificate.
+      - vcert.c                  Verify a Primo or MPU certificate.
+
 0.12  12 June 2013
 
     - add standard and extra strong Lucas probable prime tests.

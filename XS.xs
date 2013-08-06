@@ -115,19 +115,39 @@ is_lucas_pseudoprime(IN char* strn)
   ALIAS:
     is_strong_lucas_pseudoprime = 1
     is_extra_strong_lucas_pseudoprime = 2
+    is_frobenius_underwood_pseudoprime = 3
   PREINIT:
     mpz_t n;
   CODE:
     if ((strn != 0) && (strn[0] == '-') )
       croak("Parameter '%s' must be a positive integer\n", strn);
     PRIMALITY_START("is_lucas_pseudoprime", 1);
-    if (ix == 2)
-      RETVAL = _GMP_is_extra_strong_lucas_pseudoprime(n);
-    else
-      RETVAL = _GMP_is_lucas_pseudoprime(n, ix);
+    switch (ix) {
+      case 0: RETVAL = _GMP_is_lucas_pseudoprime(n, 0); break;
+      case 1: RETVAL = _GMP_is_lucas_pseudoprime(n, 1); break;
+      case 2: RETVAL = _GMP_is_lucas_pseudoprime(n, 2); break;
+      case 3: RETVAL = _GMP_is_frobenius_underwood_pseudoprime(n); break;
+      default:RETVAL = 0; break;
+    }
     mpz_clear(n);
   OUTPUT:
     RETVAL
+
+int
+is_almost_extra_strong_lucas_pseudoprime(IN char* strn, IN UV increment = 1)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    if ((strn != 0) && (strn[0] == '-') )
+      croak("Parameter '%s' must be a positive integer\n", strn);
+    if (increment == 0 || increment > 65535)
+      croak("Increment parameter must be >0 and < 65536");
+    PRIMALITY_START("is_almost_extra_strong_lucas_pseudoprime", 1);
+    RETVAL = _GMP_is_almost_extra_strong_lucas_pseudoprime(n, increment);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
 
 int
 is_prime(IN char* strn)
@@ -331,6 +351,22 @@ _GMP_trial_primes(IN char* strlow, IN char* strhigh)
   OUTPUT:
     RETVAL
 
+void
+lucas_sequence(IN char* strn, IN IV P, IN IV Q, IN char* strk)
+  PREINIT:
+    mpz_t U, V, Qk, n, k, t;
+  PPCODE:
+    VALIDATE_AND_SET("lucas_sequence", n, strn);
+    VALIDATE_AND_SET("lucas_sequence", k, strk);
+    mpz_init(U);  mpz_init(V);  mpz_init(Qk);  mpz_init(t);
+
+    _GMP_lucas_seq(U, V, n, P, Q, k, Qk, t);
+    XPUSH_MPZ(U);
+    XPUSH_MPZ(V);
+    XPUSH_MPZ(Qk);
+
+    mpz_clear(n);  mpz_clear(k);
+    mpz_clear(U);  mpz_clear(V);  mpz_clear(Qk);  mpz_clear(t);
 
 
 #define SIMPLE_FACTOR_START(name) \
@@ -347,7 +383,7 @@ _GMP_trial_primes(IN char* strlow, IN char* strhigh)
       else if (_GMP_is_prob_prime(n)) { XPUSH_MPZ(n); } \
       else { \
         mpz_t f; \
-        int success; \
+        int success = 0; \
         mpz_init(f);
 
 #define SIMPLE_FACTOR_END \
@@ -401,6 +437,16 @@ pminus1_factor(IN char* strn, IN UV B1 = 5000000, IN UV B2 = 0)
   PPCODE:
     SIMPLE_FACTOR_START("pminus1_factor");
     success = _GMP_pminus1_factor(n, f, B1, (B2 == 0) ? B1*10 : B2);
+    SIMPLE_FACTOR_END;
+
+void
+pplus1_factor(IN char* strn, IN UV B1 = 5000000, IN UV B2 = 0)
+  PREINIT:
+    mpz_t n;
+  PPCODE:
+    SIMPLE_FACTOR_START("pplus1_factor");
+    success = _GMP_pplus1_factor(n, f, 0, B1, (B2 == 0) ? B1*10 : B2);
+    /* if (!success) success = _GMP_pplus1_factor(n, f, 1, B1, (B2 == 0) ? B1*10 : B2); */
     SIMPLE_FACTOR_END;
 
 void

@@ -35,6 +35,15 @@ int mpz_divmod(mpz_t r, mpz_t a, mpz_t b, mpz_t n, mpz_t t)
   return 1;
 }
 
+/* Returns 1 if x^2 = a mod p, otherwise set x to 0 and return 0. */
+static int verify_sqrt(mpz_t x, mpz_t a, mpz_t p, mpz_t t, mpz_t t2) {
+  mpz_mulmod(t, x, x, p, t2);
+  mpz_mod(t2, a, p);
+  if (mpz_cmp(t, t2) == 0) return 1;
+  mpz_set_ui(x, 0);
+  return 0;
+}
+
 /* set x to sqrt(a) mod p.  Returns 0 if a is not a square root mod p */
 /* See Cohen section 1.5.
  * See http://www.math.vt.edu/people/brown/doc/sqrts.pdf
@@ -44,22 +53,17 @@ int sqrtmod(mpz_t x, mpz_t a, mpz_t p,
 {
   int r, e, m;
 
-  if (mpz_kronecker(a, p) != 1) { /* No solution exists */
-    mpz_set_ui(x, 0);
-    return 0;
-  }
-
   /* Easy cases from page 31 (or Menezes 3.36, 3.37) */
   if (mpz_congruent_ui_p(p, 3, 4)) {
     mpz_add_ui(t, p, 1);
-    mpz_divexact_ui(t, t, 4);
+    mpz_tdiv_q_2exp(t, t, 2);
     mpz_powm(x, a, t, p);
-    return 1;
+    return verify_sqrt(x, a, p, t, q);
   }
 
   if (mpz_congruent_ui_p(p, 5, 8)) {
     mpz_sub_ui(t, p, 1);
-    mpz_divexact_ui(t, t, 4);
+    mpz_tdiv_q_2exp(t, t, 2);
     mpz_powm(q, a, t, p);
     if (mpz_cmp_si(q, 1) == 0) { /* s = a^((p+3)/8) mod p */
       mpz_add_ui(t, p, 3);
@@ -73,7 +77,18 @@ int sqrtmod(mpz_t x, mpz_t a, mpz_t p,
       mpz_mul_ui(x, x, 2);
       mpz_mulmod(x, x, a, p, x);
     }
-    return 1;
+    return verify_sqrt(x, a, p, t, q);
+  }
+
+  if (mpz_kronecker(a, p) != 1) {
+    /* Possible no solution exists.  Check Euler criterion. */
+    mpz_sub_ui(t, p, 1);
+    mpz_tdiv_q_2exp(t, t, 1);
+    mpz_powm(x, a, t, p);
+    if (mpz_cmp_si(x, 1) != 0) {
+      mpz_set_ui(x, 0);
+      return 0;
+    }
   }
 
   mpz_sub_ui(q, p, 1);
@@ -98,7 +113,7 @@ int sqrtmod(mpz_t x, mpz_t a, mpz_t p,
       mpz_powm_ui(t, t, 2, p);
       m++;
     } while (m < r && mpz_cmp_ui(t, 1));
-    if (m == r) return 0;
+    if (m == r) break;
     mpz_ui_pow_ui(t, 2, r-m-1);
     mpz_powm(t, z, t, p);
     mpz_mulmod(x, x, t, p, x);
@@ -106,7 +121,7 @@ int sqrtmod(mpz_t x, mpz_t a, mpz_t p,
     mpz_mulmod(b, b, z, p, b);
     r = m;
   }
-  return 1;
+  return verify_sqrt(x, a, p, t, q);
 }
 
 /* Smith-Cornacchia: Solve x,y for x^2 + |D|y^2 = p given prime p */
@@ -498,13 +513,13 @@ void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, m
 
   /* Create big integers p and p2 from px and py, with padding */
   {
-    for (i = 0; i <= dx; i++) {
+    for (i = 0; i <= (UV)dx; i++) {
       mpz_mul_2exp(p, p, bits);
       mpz_add(p, p, px[dx-i]);
     }
   }
   if (px != py) {
-    for (i = 0; i <= dy; i++) {
+    for (i = 0; i <= (UV)dy; i++) {
       mpz_mul_2exp(p2, p2, bits);
       mpz_add(p2, p2, py[dy-i]);
     }
@@ -870,14 +885,22 @@ static void polyz_roots(mpz_t* roots, long *nroots,
   }
 
   if (dh >= 1 && dh < dg) {
-    /* Recurse with h */
-    polyz_roots(roots, nroots, maxroots, ph, dh, NMOD, p_randstate);
-
-    if (*nroots < maxroots) {
-      /* q = g/h, and recurse */
+    /* Pick the smaller of the two splits to process first */
+    if (dh <= 2 || dh <= (dg-dh)) {
+      polyz_roots(roots, nroots, maxroots, ph, dh, NMOD, p_randstate);
+      if (*nroots < maxroots) {
+        /* q = g/h, and recurse */
+        polyz_div(pq, pt,  pg, ph,  &dq, &dt, dg, dh);
+        polyz_mod(pq, pq, &dq, NMOD);
+        polyz_roots(roots, nroots, maxroots, pq, dq, NMOD, p_randstate);
+      }
+    } else {
       polyz_div(pq, pt,  pg, ph,  &dq, &dt, dg, dh);
       polyz_mod(pq, pq, &dq, NMOD);
       polyz_roots(roots, nroots, maxroots, pq, dq, NMOD, p_randstate);
+      if (*nroots < maxroots) {
+        polyz_roots(roots, nroots, maxroots, ph, dh, NMOD, p_randstate);
+      }
     }
   }
 
@@ -947,7 +970,7 @@ UV poly_class_poly(IV D, mpz_t**T, int* type)
   UV UD = -D;
   { /* Binary search for the poly with this D */
     UV lo = 0;
-    UV hi = NUM_CLASS_POLYS-1;
+    UV hi = NUM_CLASS_POLYS;
     while (lo < hi) {
       UV mid = (lo+hi)/2;
       if (_class_poly_data[mid].D <= UD) { lo = mid+1; }
@@ -972,6 +995,12 @@ UV poly_class_poly(IV D, mpz_t**T, int* type)
       unsigned char signcount = (*s++) & 0xFF;
       unsigned char sign = signcount >> 7;
       unsigned char count = signcount & 0x7F;
+      if (count == 127) {
+        do {
+          signcount = (*s++) & 0xFF;
+          count += signcount;
+        } while (signcount == 127);
+      }
       mpz_set_ui(t, 0);
       while (count-- > 0) {
         mpz_mul_2exp(t, t, 8);
@@ -988,17 +1017,19 @@ UV poly_class_poly(IV D, mpz_t**T, int* type)
   }
 }
 
-UV* poly_class_degrees(void)
+IV* poly_class_degrees(int insert_1s)
 {
-  UV* dlist;
+  IV* dlist;
   UV i;
   int degree_offset[256] = {0};
+  int poffset = insert_1s ? 2 : 0;
 
   for (i = 1; i < NUM_CLASS_POLYS; i++)
     if (_class_poly_data[i].D < _class_poly_data[i-1].D)
       croak("Problem with data file, out of order at D=%d\n", (int)_class_poly_data[i].D);
 
-  New(0, dlist, NUM_CLASS_POLYS+1, UV);
+  New(0, dlist, poffset + NUM_CLASS_POLYS + 1, IV);
+  dlist += poffset;
   /* init degree_offset to total number of this degree */
   for (i = 0; i < NUM_CLASS_POLYS; i++)
     degree_offset[_class_poly_data[i].degree]++;
@@ -1012,5 +1043,11 @@ UV* poly_class_degrees(void)
   }
   /* Null terminate */
   dlist[NUM_CLASS_POLYS] = 0;
+  dlist -= poffset;
+  /* Add -1 and +1 if asked */
+  if (insert_1s) {
+    dlist[0] = -1;
+    dlist[1] =  1;
+  }
   return dlist;
 }
