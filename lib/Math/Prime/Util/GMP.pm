@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.13';
+  $Math::Prime::Util::GMP::VERSION = '0.14';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -101,7 +101,7 @@ sub is_provable_prime_with_cert {
   my ($result, $text) = _is_provable_prime($n, 1);
   return @composite if $result == 0;
   return ($result, '') if $result != 2;
-  $text = "Type Small\n$n\n" if !defined $text || $text eq '';
+  $text = "Type Small\nN $n\n" if !defined $text || $text eq '';
   $text =~ s/\n$//;
   $text = "[MPU - Primality Certificate]\nVersion 1.0\n\nProof for:\nN $n\n\n$text";
   return ($result, $text);
@@ -162,7 +162,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.13
+Version 0.14
 
 
 =head1 SYNOPSIS
