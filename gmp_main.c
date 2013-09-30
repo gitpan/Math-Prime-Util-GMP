@@ -14,9 +14,12 @@
 #include "utility.h"
 
 static mpz_t _bgcd;
-#define BGCD_PRIMES      168
-#define BGCD_LASTPRIME   997
-#define BGCD_NEXTPRIME  1009
+static mpz_t _bgcd2;
+#define BGCD_PRIMES       168
+#define BGCD_LASTPRIME    997
+#define BGCD_NEXTPRIME   1009
+#define BGCD2_PRIMES     2262
+#define BGCD2_NEXTPRIME 20011
 
 void _GMP_init(void)
 {
@@ -28,6 +31,7 @@ void _GMP_init(void)
   prime_iterator_global_startup();
   mpz_init(_bgcd);
   _GMP_pn_primorial(_bgcd, BGCD_PRIMES);   /* mpz_primorial_ui(_bgcd, 1000) */
+  mpz_init_set_ui(_bgcd2, 0);
 }
 
 void _GMP_destroy(void)
@@ -35,6 +39,7 @@ void _GMP_destroy(void)
   prime_iterator_global_shutdown();
   clear_randstate();
   mpz_clear(_bgcd);
+  mpz_clear(_bgcd2);
   destroy_ecpp_gcds();
 }
 
@@ -57,29 +62,31 @@ static INLINE int _GMP_miller_rabin_ui(mpz_t n, UV base)
   return rval;
 }
 
-int _GMP_miller_rabin_random(mpz_t n, UV numbases)
+int _GMP_miller_rabin_random(mpz_t n, UV numbases, char* seedstr)
 {
   gmp_randstate_t* p_randstate = get_randstate();
-  mpz_t base;
+  mpz_t t, base;
   UV i;
 
-  /* We could just use mpz_probab_prime_p and call it a day. */
+  if (numbases == 0)  return 1;
+  if (mpz_cmp_ui(n, 100) < 0)     /* tiny n */
+    return (_GMP_is_prob_prime(n) > 0);
 
-  /* Make sure we can make proper random bases */
-  if (mpz_cmp_ui(n, 2) < 0) return 0;  /* below 2 is composite */
-  if (mpz_cmp_ui(n, 4) < 0) return 1;  /* 2 and 3 are prime */
-  if (mpz_even_p(n))        return 0;  /* multiple of 2 is composite */
+  mpz_init(base);  mpz_init(t);
 
-  mpz_init(base);
+  if (seedstr != 0) { /* Set the RNG seed if they gave us a seed */
+    mpz_set_str(t, seedstr, 0);
+    gmp_randseed(*p_randstate, t);
+  }
+
+  mpz_sub_ui(t, n, 3);
   for (i = 0; i < numbases; i++) {
-    /* select a random base between 2 and n-2 (we're lazy and use n-1) */
-    do {
-      mpz_urandomm(base, *p_randstate, n);
-    } while (mpz_cmp(base, n) >= 0 || mpz_cmp_ui(base, 1) <= 0);
+    mpz_urandomm(base, *p_randstate, t);  /* base = 0 .. (n-3)-1 */
+    mpz_add_ui(base, base, 2);            /* base = 2 .. n-2     */
     if (_GMP_miller_rabin(n, base) == 0)
       break;
   }
-  mpz_clear(base);
+  mpz_clear(base);  mpz_clear(t);
   return (i >= numbases);
 }
 
@@ -255,9 +262,9 @@ static int lucas_selfridge_params(IV* P, IV* Q, mpz_t n, mpz_t t)
 
 static int lucas_extrastrong_params(IV* P, IV* Q, mpz_t n, mpz_t t, UV inc)
 {
+  UV tP = 3;
   if (inc < 1 || inc > 256)
     croak("Invalid lucas paramater increment: %"UVuf"\n", inc);
-  UV tP = 3;
   while (1) {
     UV D = tP*tP - 4;
     UV gcd = mpz_gcd_ui(NULL, n, D);
@@ -549,31 +556,141 @@ int _GMP_is_frobenius_underwood_pseudoprime(mpz_t n)
 
 UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
 {
-  int small_n = 0;
-  UV f = 2;
+  size_t log2n = mpz_sizeinbase(n, 2);
+  UV p = 0;
   PRIME_ITERATOR(iter);
 
-  if (mpz_cmp_ui(n, 4) < 0) {
-    return (mpz_cmp_ui(n, 1) <= 0) ? 1 : 0;   /* 0,1 => 1   2,3 => 0 */
+  if (mpz_cmp_ui(n, 6) < 0) {
+    unsigned long un = mpz_get_ui(n);
+    if (un == 1) p = 1;
+    else if (un == 4 && from_n <= 2 && to_n >= 2) p = 2;
+    prime_iterator_destroy(&iter);
+    return p;
   }
-  if ( (from_n <= 2) && mpz_even_p(n) )   return 2;
+  if      (from_n <= 2 && to_n >= 2 && mpz_even_p(n))             p = 2;
+  else if (from_n <= 3 && to_n >= 3 && mpz_divisible_ui_p(n, 3))  p = 3;
+  else if (from_n <= 5 && to_n >= 5 && mpz_divisible_ui_p(n, 5))  p = 5;
+  if (p != 0) {
+    prime_iterator_destroy(&iter);
+    return p;
+  }
 
+  if (from_n < 7)
+    from_n = 7;
   if (from_n > to_n)
-    croak("GMP_trial_factor from > to: %"UVuf" - %"UVuf, from_n, to_n);
+    { prime_iterator_destroy(&iter);  return 0; }
+  /* p will be the next prime >= from_n */
+  prime_iterator_setprime(&iter, from_n-1);
+  p = prime_iterator_next(&iter);
 
-  if (mpz_cmp_ui(n, to_n*to_n) < 0)
-    small_n = 1;
+  /* All native math if n fits in an unsigned long */
+  if (log2n <= sizeof(unsigned long)*8) {
+    unsigned long un = mpz_get_ui(n);
+    unsigned long sqrtn = (unsigned long) sqrt((double)un);
+    while (sqrtn*sqrtn > un) sqrtn--;
+    while ((sqrtn+1)*(sqrtn+1) <= un)  sqrtn++;
+    if (to_n > sqrtn)
+      to_n = sqrtn;
+    while (p <= to_n) {
+      if ((un % p) == 0)
+        break;
+      p = prime_iterator_next(&iter);
+    }
+    prime_iterator_destroy(&iter);
+    return (p <= to_n) ? p : 0;
+  }
 
-  /* Skip forward to the next prime >= from_n */
-  while (f < from_n)
-    f = prime_iterator_next(&iter);
+  /* For "small" numbers, this simple method is best. */
+  {
+    UV small_to = (log2n < 3000)  ?  to_n  :  10000;
+    while (p <= small_to) {
+      if (mpz_divisible_ui_p(n, p))
+        break;
+      p = prime_iterator_next(&iter);
+    }
+    if (p <= small_to || p > to_n) {
+      prime_iterator_destroy(&iter);
+      return (p <= small_to) ? p : 0;
+    }
+  }
 
-  for (; f <= to_n; f = prime_iterator_next(&iter)) {
-    if (small_n && mpz_cmp_ui(n, f*f) < 0) break;
-    if (mpz_divisible_ui_p(n, f)) { prime_iterator_destroy(&iter); return f; }
+  /* Simple treesieve.
+   * This is much faster than simple divisibility for really big numbers.
+   * Credit to Jens K Andersen for writing up the generic algorithm.
+   *
+   * This will search until the first group element is > to_n, which means
+   * we will search a bit farther than to_n.
+   */
+  {
+    UV found = 0;
+    unsigned long* xn;        /* leaves */
+    mpz_t* xtree[16+1];       /* the tree (maxdepth = 16) */
+    mpz_t* xtemp;
+    unsigned int i, j, d, depth, leafsize, nleaves;
+
+    /* Decide on the tree depth (3-16) and number of leaves (10-31) */
+    {
+      unsigned int dp = log2n >> 10;
+      depth = 0;
+      while (dp >>= 1) depth++;
+      if (depth < 3) depth = 3;
+      if (depth > 16) depth = 16;
+    }
+    leafsize = log2n / (1U << depth) / 68;
+    nleaves = 1 << depth;
+    /* printf("log2n %lu  depth %u  leafsize %u  nleaves %u\n",log2n,depth,leafsize,nleaves); */
+
+    New(0, xn, nleaves * leafsize, unsigned long);
+    for (d = 0; d <= depth; d++) {
+      unsigned int nodes = 1 << (depth - d);
+      New(0, xtree[d], nodes, mpz_t);
+      for (j = 0; j < nodes; j++)
+        mpz_init(xtree[d][j]);
+    }
+    xtemp = xtree[1];   /* implies mindepth = 3 */
+
+    while (!found && p <= to_n) {
+      /* Create nleaves x[0] values, each the product of leafsize primes */
+      for (i = 0; i < nleaves; i++) {
+        for (j = 0; j < 4; j++)                  /* Create 4 sub-products */
+          mpz_set_ui(xtemp[j], 1);
+        for (j = 0; j < leafsize; j++) {
+          xn[i*leafsize+j] = p;
+          mpz_mul_ui(xtemp[j&3], xtemp[j&3], p);
+          p = prime_iterator_next(&iter);
+        }
+        mpz_mul(xtemp[0], xtemp[0], xtemp[1]);   /* Combine for final product*/
+        mpz_mul(xtemp[2], xtemp[2], xtemp[3]);
+        mpz_mul(xtree[0][i], xtemp[0], xtemp[2]);
+      }
+      /* Multiply product tree, xtree[depth][0] has nleaves*leafsize product */
+      for (d = 1; d <= depth; d++)
+        for (i = 0; i < (1U << (depth-d)); i++)
+          mpz_mul(xtree[d][i], xtree[d-1][2*i], xtree[d-1][2*i+1]);
+      /* Go backwards replacing the products with remainders */
+      mpz_tdiv_r(xtree[depth][0], n, xtree[depth][0]);
+      for (d = 1; d <= depth; d++)
+        for (i = 0; i < (1U << d); i++)
+          mpz_tdiv_r(xtree[depth-d][i], xtree[depth-d+1][i>>1], xtree[depth-d][i]);
+      /* Search each leaf for divisors */
+      for (i = 0; !found && i < nleaves; i++)
+        for (j = 0; j < leafsize; j++)
+          if (mpz_divisible_ui_p(xtree[0][i], xn[i*leafsize+j]))
+            { found = xn[i*leafsize+j]; break; }
+    }
+    p = found;
+    for (d = 0; d <= depth; d++) {
+      unsigned int nodes = 1U << (depth - d);
+      for (j = 0; j < nodes; j++)
+        mpz_clear(xtree[d][j]);
+      Safefree(xtree[d]);
+    }
+    Safefree(xn);
+    if (p > 0 && !mpz_divisible_ui_p(n, p))
+      croak("incorrect trial factor\n");
   }
   prime_iterator_destroy(&iter);
-  return 0;
+  return p;
 }
 
 /*
@@ -605,7 +722,6 @@ UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
 
 int _GMP_is_prob_prime(mpz_t n)
 {
-  UV log2n;
   /*  Step 1: Look for small divisors.  This is done purely for performance.
    *          It is *not* a requirement for the BPSW test. */
 
@@ -617,28 +733,57 @@ int _GMP_is_prob_prime(mpz_t n)
   if ( mpz_even_p(n)
     || mpz_divisible_ui_p(n, 3)
     || mpz_divisible_ui_p(n, 5) ) return 0;
-  /* Do a big GCD with all primes < 1009 */
+
   {
+    UV log2n = mpz_sizeinbase(n,2);
     mpz_t t;
-    int r;
     mpz_init(t);
+
+    /* Do a GCD with all primes < 1009 */
     mpz_gcd(t, n, _bgcd);
-    r = mpz_cmp_ui(t, 1);
+    if (mpz_cmp_ui(t, 1))
+      { mpz_clear(t); return 0; }
+
+    /* No divisors under 1009 */
+    if (mpz_cmp_ui(n, BGCD_NEXTPRIME*BGCD_NEXTPRIME) < 0)
+      { mpz_clear(t); return 2; }
+
+    /* If we're reasonably large, do a gcd with more primes */
+    if (log2n > 128) {
+      if (mpz_sgn(_bgcd2) == 0) {
+        _GMP_pn_primorial(_bgcd2, BGCD2_PRIMES);
+        mpz_divexact(_bgcd2, _bgcd2, _bgcd);
+      }
+      mpz_gcd(t, n, _bgcd2);
+      if (mpz_cmp_ui(t, 1))
+        { mpz_clear(t); return 0; }
+    }
     mpz_clear(t);
-    if (r != 0)
-      return 0;
+    /* Do more trial division if we think we should.
+     * According to Menezes (section 4.45) as well as Park (ISPEC 2005),
+     * we want to select a trial limit B such that B = E/D where E is the
+     * time for our primality test (one M-R test) and D is the time for
+     * one trial division.  Example times on my machine came out to
+     *   log2n = 840375, E= 6514005000 uS, D=1.45 uS, E/D = 0.006 * log2n
+     *   log2n = 465618, E= 1815000000 uS, D=1.05 uS, E/D = 0.008 * log2n
+     *   log2n = 199353, E=  287282000 uS, D=0.70 uS, E/D = 0.01  * log2n
+     *   log2n =  99678, E=   56956000 uS, D=0.55 uS, E/D = 0.01  * log2n
+     *   log2n =  33412, E=    4289000 uS, D=0.30 uS, E/D = 0.013 * log2n
+     *   log2n =  13484, E=     470000 uS, D=0.21 uS, E/D = 0.012 * log2n
+     * Our trial division could also be further improved for large inputs.
+     */
+    if (log2n > 16000) {
+      double dB = (double)log2n * (double)log2n * 0.005;
+      if (BITS_PER_WORD == 32 && dB > 4200000000.0) dB = 4200000000.0;
+      if (_GMP_trial_factor(n, BGCD2_NEXTPRIME, (UV)dB))  return 0;
+    } else if (log2n > 3000) {
+      if (_GMP_trial_factor(n, BGCD2_NEXTPRIME, 80*log2n))  return 0;
+    } else if (log2n > 1000) {
+      if (_GMP_trial_factor(n, BGCD2_NEXTPRIME, 30*log2n))  return 0;
+    }
   }
-  /* No divisors under 1009 */
-  if (mpz_cmp_ui(n, BGCD_NEXTPRIME*BGCD_NEXTPRIME) < 0)
-    return 2;
 
-  /* For very large numbers, it's worth our time to do more trial division.
-   * This is a 1.3 - 2x speedup for big next_prime, for instance. */
-  log2n = mpz_sizeinbase(n,2);
-  if (log2n > 300 && _GMP_trial_factor(n, BGCD_LASTPRIME, log2n*50))
-    return 0;
-
-  /*  Step 2: The BPSW test.  psp base 2 and slpsp. */
+  /*  Step 2: The BPSW test.  spsp base 2 and slpsp. */
 
   /* Miller Rabin with base 2 */
   if (_GMP_miller_rabin_ui(n, 2) == 0)
@@ -674,7 +819,7 @@ int _GMP_is_prime(mpz_t n)
     else if (nbits < 160) ntests = 3;  /* p < .00000164 */
     else if (nbits < 413) ntests = 2;  /* p < .00000156 */
     else                  ntests = 1;  /* p < .00000159 */
-    prob_prime = _GMP_miller_rabin_random(n, ntests);
+    prob_prime = _GMP_miller_rabin_random(n, ntests, 0);
   }
 
   /* Using Damgård, Landrock, and Pomerance, we get upper bounds:
@@ -708,7 +853,7 @@ int _GMP_is_provable_prime(mpz_t n, char** prooftext)
 
   /* Run one more M-R test, just in case. */
   if (prob_prime == 1)
-    prob_prime = _GMP_miller_rabin_random(n, 1);
+    prob_prime = _GMP_miller_rabin_random(n, 1, 0);
 
   /* We can choose a primality proving algorithm:
    *   AKS    _GMP_is_aks_prime       really slow, don't bother
@@ -937,20 +1082,39 @@ void _GMP_prev_prime(mpz_t n)
   mpz_clear(d);
 }
 
-#define HALF_UI_WORD (UVCONST(1) << (sizeof(unsigned long)/2))
+#define LAST_DOUBLE_PROD \
+  ((BITS_PER_WORD == 32) ? UVCONST(65521) : UVCONST(4294967291))
 void _GMP_pn_primorial(mpz_t prim, UV n)
 {
   UV p = 2;
   PRIME_ITERATOR(iter);
 
-  mpz_set_ui(prim, 1);
-  while (n > 0) {
-    unsigned long a = 1;
-    do {
-      a *= p;
+  if (n < 800) {  /* Don't go above 6500 to prevent overflow below */
+    /* Simple linear multiplication, two at a time */
+    mpz_set_ui(prim, 1);
+    while (n-- > 0) {
+      if (n > 0) { p *= prime_iterator_next(&iter); n--; }
+      mpz_mul_ui(prim, prim, p);
       p = prime_iterator_next(&iter);
-    } while (--n && (a|(unsigned long)p) < HALF_UI_WORD);
-    mpz_mul_ui(prim, prim, a);
+    }
+  } else {
+    /* Shallow product tree, ~10x faster for large values */
+    mpz_t t[16];
+    UV i;
+    for (i = 0; i < 16; i++)  mpz_init_set_ui(t[i], 1);
+    i = 0;
+    while (n-- > 0) {
+      if (p <= LAST_DOUBLE_PROD && n > 0)
+        { p *= prime_iterator_next(&iter); n--; }
+      mpz_mul_ui(t[i&15], t[i&15], p);
+      p = prime_iterator_next(&iter);
+      i++;
+    }
+    for (i = 0; i < 8; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+    for (i = 0; i < 4; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+    for (i = 0; i < 2; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+    mpz_mul(prim, t[0], t[1]);
+    for (i = 0; i < 16; i++)  mpz_clear(t[i]);
   }
   prime_iterator_destroy(&iter);
 }
@@ -959,10 +1123,29 @@ void _GMP_primorial(mpz_t prim, mpz_t n)
   UV p = 2;
   PRIME_ITERATOR(iter);
 
-  mpz_set_ui(prim, 1);
-  while (mpz_cmp_ui(n, p) >= 0) {
-    mpz_mul_ui(prim, prim, p);
-    p = prime_iterator_next(&iter);
+  if (mpz_cmp_ui(n, 4000) < 0) {
+    /* Simple linear multiplication, one at a time */
+    mpz_set_ui(prim, 1);
+    while (mpz_cmp_ui(n, p) >= 0) {
+      mpz_mul_ui(prim, prim, p);
+      p = prime_iterator_next(&iter);
+    }
+  } else {
+    /* Shallow product tree, ~10x faster for large values */
+    mpz_t t[16];
+    UV i;
+    for (i = 0; i < 16; i++)  mpz_init_set_ui(t[i], 1);
+    i = 0;
+    while (mpz_cmp_ui(n, p) >= 0) {
+      mpz_mul_ui(t[i&15], t[i&15], p);
+      p = prime_iterator_next(&iter);
+      i++;
+    }
+    for (i = 0; i < 8; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+    for (i = 0; i < 4; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+    for (i = 0; i < 2; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+    mpz_mul(prim, t[0], t[1]);
+    for (i = 0; i < 16; i++)  mpz_clear(t[i]);
   }
   prime_iterator_destroy(&iter);
 }
@@ -1087,18 +1270,21 @@ int _GMP_pbrent_factor(mpz_t n, mpz_t f, UV a, UV rounds)
 
 void _GMP_lcm_of_consecutive_integers(UV B, mpz_t m)
 {
-  UV p, p_power, pmin;
+  UV i, p, p_power, pmin;
+  mpz_t t[8];
   PRIME_ITERATOR(iter);
 
+  /* Create eight sub-products to combine at the end. */
+  for (i = 0; i < 8; i++)  mpz_init_set_ui(t[i], 1);
+  i = 0;
   /* For each prime, multiply m by p^floor(log B / log p), which means
    * raise p to the largest power e such that p^e <= B.
    */
-  mpz_set_ui(m, 1);
   if (B >= 2) {
     p_power = 2;
     while (p_power <= B/2)
       p_power *= 2;
-    mpz_mul_ui(m, m, p_power);
+    mpz_mul_ui(t[i&7], t[i&7], p_power);  i++;
   }
   p = prime_iterator_next(&iter);
   while (p <= B) {
@@ -1108,13 +1294,18 @@ void _GMP_lcm_of_consecutive_integers(UV B, mpz_t m)
     p_power = p*p;
     while (p_power <= pmin)
       p_power *= p;
-    mpz_mul_ui(m, m, p_power);
+    mpz_mul_ui(t[i&7], t[i&7], p_power);  i++;
     p = prime_iterator_next(&iter);
   }
   while (p <= B) {
-    mpz_mul_ui(m, m, p);
+    mpz_mul_ui(t[i&7], t[i&7], p);  i++;
     p = prime_iterator_next(&iter);
   }
+  /* combine the eight sub-products */
+  for (i = 0; i < 4; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+  for (i = 0; i < 2; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
+  mpz_mul(m, t[0], t[1]);
+  for (i = 0; i < 8; i++)  mpz_clear(t[i]);
   prime_iterator_destroy(&iter);
 }
 

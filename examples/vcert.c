@@ -1,6 +1,6 @@
 /*
  * Verify Cert
- * version 0.9
+ * version 0.94
  *
  * Copyright (c) 2013 Dana Jacobsen (dana@acm.org).
  * This is free software; you can redistribute it and/or modify it under
@@ -15,7 +15,7 @@
  *   3  there is an error in the certificate.
  *
  * TODO: Allow multiple proofs per input file
- * TODO: Projective EC for faster operation
+ * TODO: Projective EC for ~4x faster operation
  */
 
 #include <stdio.h>
@@ -29,6 +29,9 @@
 /* Preliminary definitions                                                   */
 /*****************************************************************************/
 
+/* Projective doesn't work yet */
+#define USE_AFFINE_EC 1
+
 #define RET_PRIME 0
 #define RET_COMPOSITE 1
 #define RET_INVALID 2
@@ -38,9 +41,10 @@
 #define CERT_PRIMO   1
 #define CERT_MPU     2
 
-#define MAX_LINE_LEN 30000
-#define MAX_STEPS    3000
-#define MAX_QARRAY   30
+#define MAX_LINE_LEN 60000
+#define MAX_STEPS    20000
+#define MAX_QARRAY   100
+#define BAD_LINES_ALLOWED  5    /* Similar to WraithX's verifier */
 
 typedef unsigned long UV;
 typedef   signed long IV;
@@ -52,7 +56,6 @@ typedef   signed long IV;
 #define BGCD_NEXTPRIME  1009
 
 void GMP_pn_primorial(mpz_t prim, UV n);
-void GMP_primorial(mpz_t prim, mpz_t n);
 UV trial_factor(mpz_t n, UV from_n, UV to_n);
 int miller_rabin_ui(mpz_t n, UV base);
 int miller_rabin(mpz_t n, mpz_t a);
@@ -68,6 +71,7 @@ int _verbose = 0;
 int _quiet = 0;
 int _testcount = 0;
 int _base = 10;
+int _step = 0;
 int _format = CERT_UNKNOWN;
 char _line[MAX_LINE_LEN+1];
 char _vstr[MAX_LINE_LEN+1];
@@ -153,18 +157,19 @@ static void quit_composite(void) {
   exit(RET_COMPOSITE);
 }
 static void quit_invalid(const char* type, const char* msg) {
-  if (!_quiet) printf("                                             \r");
-  if (!_quiet) gmp_printf("%s: %Zd failed condition %s\n", type, N, msg);
+  if (!_quiet) printf("\n");
+  if (!_quiet) gmp_printf("%s: step %d, %Zd failed condition %s\n", type, _step, N, msg);
   var_free();
   exit(RET_INVALID);
 }
 static void quit_error(const char* msg1, const char* msg2) {
-  if (!_quiet) printf("                                             \r");
-  if (!_quiet) gmp_printf("ERROR: %s%s\n", msg1, msg2);
+  if (!_quiet) printf("\n");
+  if (!_quiet) gmp_printf("ERROR: step %d, %s%s\n", _step, msg1, msg2);
   var_free();
   exit(RET_ERROR);
 }
 
+#if USE_AFFINE_EC
 /*****************************************************************************/
 /* EC: affine with point (x,y,1)                                             */
 /*****************************************************************************/
@@ -308,7 +313,8 @@ static int ec_affine_multiply(mpz_t a, mpz_t k, mpz_t n, struct ec_affine_point 
   return found;
 }
 
-#if 0
+#else
+
 /*****************************************************************************/
 /* EC: projective with point (X,1,Z) (Montgomery)                            */
 /*****************************************************************************/
@@ -408,6 +414,7 @@ static void pec_mult(mpz_t a, mpz_t b, mpz_t k, mpz_t n, mpz_t x, mpz_t z)
   mpz_clear(u);  mpz_clear(v);  mpz_clear(w);
   mpz_clear(x1);  mpz_clear(x2);  mpz_clear(z1);  mpz_clear(z2);
 }
+
 #endif
 
 /*****************************************************************************/
@@ -637,7 +644,6 @@ int is_lucas_pseudoprime(mpz_t n, int strength)
     mpz_clear(t);
     return 0;
   }
-  if (_verbose>3) gmp_printf("N: %Zd  D: %ld  P: %lu  Q: %ld\n", n, P*P-4*Q, P, Q);
 
   mpz_init(U);  mpz_init(V);  mpz_init(Qk);
   mpz_init_set(d, n);
@@ -736,8 +742,9 @@ int is_prob_prime(mpz_t n)
   return 1;
 }
 
-/* The primorial and trial_factor functions should use prime_iterator.
- * mpz_nextprime is horribly slow, so these will be really slow. */
+/* These primorial and trial factor functions are really slow for numerous
+ * reasons, but most of all because mpz_nextprime is dog slow.  We don't
+ * really use them, so don't worry about it too much. */
 void GMP_pn_primorial(mpz_t prim, UV n)
 {
   mpz_t p;
@@ -749,50 +756,80 @@ void GMP_pn_primorial(mpz_t prim, UV n)
   }
   mpz_clear(p);
 }
-void GMP_primorial(mpz_t prim, mpz_t n)
-{
-  mpz_t p;
-  mpz_init_set_ui(p, 2);
-  mpz_set_ui(prim, 1);
-  while (mpz_cmp(n, p) >= 0) {
-    mpz_mul(prim, prim, p);
-    mpz_nextprime(p, p);
-  }
-  mpz_clear(p);
-}
-
-/* This has craptastic performance. */
 UV trial_factor(mpz_t n, UV from_n, UV to_n)
 {
-  mpz_t p, sqrtn;
+  mpz_t p;
+  UV f = 0;
 
-  if (mpz_cmp_ui(n, 4) < 0) {
+  if (mpz_cmp_ui(n, 4) < 0)
     return (mpz_cmp_ui(n, 1) <= 0) ? 1 : 0;   /* 0,1 => 1   2,3 => 0 */
-  }
-  if ( (from_n <= 2) && mpz_even_p(n) )   return 2;
+  
+  if      (from_n <= 2 && to_n >= 2 && mpz_even_p(n)           ) return 2;
+  else if (from_n <= 3 && to_n >= 3 && mpz_divisible_ui_p(n, 3)) return 2;
+  if (from_n < 5)
+    from_n = 5;
+  if (from_n > to_n)
+    return 0;
 
-  if (from_n < 3) from_n = 3;
-  mpz_init_set_ui(p, from_n-1);
-  mpz_nextprime(p, p);
-  mpz_init(sqrtn);
-  mpz_sqrt(sqrtn, n);
-  while (mpz_cmp_ui(p, to_n) <= 0 && mpz_cmp(p, sqrtn) <= 0) {
+  mpz_init(p);
+  mpz_sqrt(p, n);
+  if (mpz_cmp_ui(p, to_n) < 0)
+    to_n = mpz_get_ui(p);      /* limit to_n to sqrtn */
+  mpz_set_ui(p, from_n-1);
+  mpz_nextprime(p, p);         /* Set p to the first prime >= from_n */
+
+  while (mpz_cmp_ui(p, to_n) <= 0) {
     if (mpz_divisible_p(n, p)) {
-      UV f = mpz_get_ui(p);
-      mpz_clear(p);  mpz_clear(sqrtn);
-      return f;
+      f = mpz_get_ui(p);
+      break;
     }
     mpz_nextprime(p, p);
   }
-  mpz_clear(p);  mpz_clear(sqrtn);
-  return 0;
+  mpz_clear(p);
+  return f;
 }
 
 /*****************************************************************************/
 /* Proof verification                                                        */
 /*****************************************************************************/
 
-/* ECPP using N, A, B, M, Q, X, Y */
+/* What each of these does is verify:
+ *      Assume Q is prime.
+ *      Then N is prime based on the proof given.
+ * We verify any necessary conditions on Q (e.g. it must be odd, or > 0, etc.
+ * but do not verify Q prime.  That is done in another proof step.
+ */
+
+/* ECPP using N, A, B, M, Q, X, Y
+ *
+ * A.O.L. Atkin and F. Morain, "Elliptic Curves and primality proving"
+ * Mathematics of Computation, v61, 1993, pages 29-68.
+ * http://www.ams.org/journals/mcom/1993-61-203/S0025-5718-1993-1199989-X/
+ *
+ * Page 10, Theorem 5.2:
+ *  "Let N be an integer prime to 6, E an elliptic curve over Z/NZ, together
+ *   with a point P on E and m and s two integers with s | m.  For each prime
+ *   divisor q of s, we put (m/q)P = (x_q : y_q : z_q).  We assume that
+ *   mP = O_E and gcd(z_q,N) = 1 for all q.  Then, if p is a prime divisor
+ *   of N, one has #E(Z/pZ) = 0 mod s."
+ * Page 10, Corollary 5.1:
+ *  "With the same conditions, if s > (N^(1/4) + 1)^2, then N is prime."
+ *
+ * Basically this same result is repeated in Crandall and Pomerance 2005,
+ * Theorem 7.6.1 "Goldwasser-Kilian ECPP theorem".
+ *
+ * Wikipedia, "Elliptic curve primality testing":
+ *  "Let N be a positive integer, and E be the set which is defined by the
+ *   equation y^2 = x^3 + ax + b (mod N).  Consider E over Z/NZ, use the
+ *   usual addition law on E, and write O for the neutral element on E.
+ *   Let m be an integer.  If there is a prime q which divides m, and is
+ *   greater than (N^(1/4) + 1)^2 and there exists a point P on E such that
+ *   (1) mP = O, (2) (m/q)P is defined and not equal to O, then N is prime."
+ *
+ * We use the restricted form as stated by Wikipedia and used in the
+ * Atkin/Morain ECPP algorithm, where s is a prime (hence the "for each prime
+ * divisor q of s" of the general theorem is just s).
+ */
 void verify_ecpp(void) {
   mpz_mod(A, A, N);
   mpz_mod(B, B, N);
@@ -815,14 +852,14 @@ void verify_ecpp(void) {
   mpz_mul(T2, Y, Y);
   mpz_mod(T2, T2, N);
   if (mpz_cmp(T1, T2) != 0)   quit_invalid("ECPP", "Y^2 = X^3 + A*X + B mod N");
-  mpz_sqrt(T2, N);
-  mpz_mul_ui(T2, T2, 2);
+  mpz_mul_ui(T2, N, 4);
+  mpz_sqrt(T2, T2);
   mpz_add_ui(T1, N, 1);
   mpz_sub(T1, T1, T2);
-  if (mpz_cmp(M, T1) < 0)     quit_invalid("ECPP", "M >= N - 2*sqrt(N) + 1");
+  if (mpz_cmp(M, T1) < 0)     quit_invalid("ECPP", "M >= N + 1 - 2*sqrt(N)");
   mpz_add_ui(T1, N, 1);
   mpz_add(T1, T1, T2);
-  if (mpz_cmp(M, T1) > 0)     quit_invalid("ECPP", "M <= N + 2*sqrt(N) + 1");
+  if (mpz_cmp(M, T1) > 0)     quit_invalid("ECPP", "M <= N + 1 + 2*sqrt(N)");
   mpz_root(T1, N, 4);
   mpz_add_ui(T1, T1, 1);
   mpz_mul(T1, T1, T1);
@@ -832,7 +869,7 @@ void verify_ecpp(void) {
   if (!mpz_divisible_p(M, Q)) quit_invalid("ECPP", "Q divides M");
 
   {
-#if 1
+#if USE_AFFINE_EC
     struct ec_affine_point P0, P1, P2;
     mpz_init_set(P0.x, X);  mpz_init_set(P0.y, Y);
     mpz_init(P1.x); mpz_init(P1.y);
@@ -840,7 +877,6 @@ void verify_ecpp(void) {
     mpz_divexact(T1, M, Q);
     if (ec_affine_multiply(A, T1, N, P0, &P2, T2))
       quit_invalid("ECPP", "Factor found for N");
-    mpz_divexact(T1, M, Q);
     /* Check that P2 is not (0,1) */
     if (mpz_cmp_ui(P2.x, 0) == 0 && mpz_cmp_ui(P2.y, 1) == 0)
       quit_invalid("ECPP", "(M/Q) * EC(A,B,N,X,Y) is not identity");
@@ -854,32 +890,84 @@ void verify_ecpp(void) {
     mpz_clear(P1.x); mpz_clear(P1.y);
     mpz_clear(P2.x); mpz_clear(P2.y);
 #else
-    mpz_t PX, PY;
-    mpz_init_set(PX, X);
-    mpz_init_set(PY, Y);
+    mpz_t PX, PY, PA, PB;
+    mpz_init(PX);  mpz_init(PY);  mpz_init(PA);  mpz_init(PB);
 
-    mpz_set_ui(T1, 1);
-    mpz_invert(PY, Y, N);          /* z = Y/Z, Y=1  =>  Z = 1/z */
-    mpz_mulmod(PX, PY, X, N, T1);  /* x = X/Z       =>  X = Zx  */
-    gmp_printf("PX: %Zd  PY: %Zd\n", PX, PY);
+    /* We have A,B,X,Y in affine coordinates, for the curve:
+     *   Y^2 = X^3 + AX + B
+     * and want to turn this into points on a Montgomery curve:
+     *   by^2 = x^3 + ax^2 + x
+     * so we can use the much faster (~4x) multiplication routines.
+     * The inverse of this operation is:
+     *    X = (3x+a)/3b
+     *    Y = y/b
+     *    A = (3-a^2)/(3b^2)
+     *    B = (2a^3-9a)/27b^3
+     * In our case we need to do the harder job of going the other direction.
+     */
+
+    /* Make Montgomery variables from affine (TODO: make this work) */
+    mpz_add(PB, X, A);
+    mpz_mul(PB, PB, X);
+    mpz_add_ui(PB, PB, 1);
+    mpz_mul(PB, PB, X);
+    mpz_mod(PB, PB, N);
+
+    mpz_mul_ui(T2, PB, 3);
+    mpz_mul(T2, T2, PB);
+    mpz_mod(T2, T2, N);
+    mpz_gcdext(T2, T1, NULL, T2, N); /* T1 = 1/3g^2 */
+    if (mpz_cmp_ui(T2,1) != 0) quit_invalid("ECPP", "Factor found during gcd");
+
+    mpz_mul_ui(PX, X, 3);
+    mpz_add(PX, PX, A);
+    mpz_mul(PX, PX, PB);
+    mpz_mul(PX, PX, T1);
+    mpz_mod(PX, PX, N);
+
+    mpz_set(PY, Y);
+    mpz_mul_ui(PY, PY, 3);
+    mpz_mul(PY, PY, PB);
+    mpz_mul(PY, PY, T1);
+    mpz_mod(PY, PY, N);  /* y = (3gY)/(3g^2) = Y/g */
+
+    mpz_mul(PA, A, A);
+    mpz_sub_ui(PA, PA, 3);
+    mpz_neg(PA, PA);
+    mpz_mul(PA, PA, T1);
+    mpz_mod(PA, PA, N);
+
+    //gmp_printf("PX: %Zd  PY: %Zd\n", PX, PY);
 
     mpz_divexact(T1, M, Q);
-    pec_mult(A, B, T1, N, PX, PY);
-    gmp_printf("PX: %Zd  PY: %Zd\n", PX, PY);
+    pec_mult(PA, PB, T1, N, PX, PY);
+    //gmp_printf("PX: %Zd  PY: %Zd\n", PX, PY);
     /* Check that point is not (0,0) */
     if (mpz_cmp_ui(PX, 0) == 0 && mpz_cmp_ui(PY, 0) == 0)
       quit_invalid("ECPP", "(M/Q) * EC(A,B,N,X,Y) is not identity");
     mpz_set(T1, Q);
-    pec_mult(A, B, T1, N, PX, PY);
-    gmp_printf("PX: %Zd  PY: %Zd\n", PX, PY);
+    pec_mult(PA, PB, T1, N, PX, PY);
+    //gmp_printf("PX: %Zd  PY: %Zd\n", PX, PY);
     /* Check that point is (0, 0) */
     if (! (mpz_cmp_ui(PX, 0) == 0 && mpz_cmp_ui(PY, 0) == 0) )
       quit_invalid("ECPP", "M * EC(A,B,N,X,Y) is identity");
+    mpz_clear(PX);  mpz_clear(PY);  mpz_clear(PA);  mpz_clear(PB);
 #endif
   }
 }
 
-/* Basic N+1 using N, Q, LP, LQ */
+/* Basic N+1 using N, Q, LP, LQ
+ *
+ * John Brillhart, D.H. Lehmer, J.L. Selfridge,
+ *   "New Primality Criteria and Factorizations of 2^m +/- 1"
+ * Mathematics of Computation, v29, n130, April 1975, pp 620-647.
+ * http://www.ams.org/journals/mcom/1975-29-130/S0025-5718-1975-0384673-1/S0025-5718-1975-0384673-1.pdf
+ *
+ * Page 631, Theorem 15:
+ *  "Let N+1 = mq, where q is an odd prime such that 2q-1 > sqrt(N).
+ *   If there exists a Lucas sequence {V_k} of discriminant D with
+ *   (D|N) = -1 for which N|V_{(N+1)/2}, but N∤V_{m/2}, then N is prime."
+ */
 void verify_bls15(void) {
   if (mpz_even_p(Q))            quit_invalid("BLS15", "Q odd");
   if (mpz_cmp_ui(Q, 2) <= 0)    quit_invalid("BLS15", "Q > 2");
@@ -921,7 +1009,28 @@ void verify_bls15(void) {
   }
 }
 
-/* Simplistic N-1 using N, Q, A */
+/* Simplistic N-1 using N, Q, A
+ *
+ * Hans Riesel, "Prime Numbers and Computer Methods for Factorization"
+ * page 103-104, Theorem 4.6:
+ *  "Suppose N-1 = R*F = R prod(j=1,n,q_j^{B_j}), with all q_j's distinct
+ *   primes, with GCD(R,F) = 1 and R < F.  If an integer a can be found, s.t.
+ *     GCD(A^((N-1)/q_j)-1,N) = 1 for all j=1..n
+ *   and satisfying
+ *     a^(N-1) = 1 mod N
+ *   then N is a prime."
+ *
+ * Now make the severe restriction that F must be a single prime q.  This then
+ * reduces to the Wikipedia "Pocklington primality test":
+ *  "Let N > 1 be an integer, and suppose there exist numbers a and q such that
+ *   (1) q is prime, q|N-1 and q > sqrt(N)-1
+ *   (2) a^(N-1) = 1 mod N
+ *   (3) gcd(a^((N-1)/q)-1,N) = 1
+ *   Then N is prime."
+ *
+ * Note that BLS75 theorem 3 is similar, but also allows a smaller q.  Also,
+ * BLS75 theorem 5 is a much better method than generalized Pocklington.
+ */
 void verify_pocklington(void)
 {
   mpz_sub_ui(T2, N, 1);
@@ -942,7 +1051,19 @@ void verify_pocklington(void)
   mpz_gcd(T1, T1, N);
   if (mpz_cmp_ui(T1, 1) != 0)   quit_invalid("Pocklington", "gcd(A^M - 1, N) = 1");
 }
-/* Basic N-1 using N, Q, A */
+
+/* Basic N-1 using N, Q, A
+ *
+ * John Brillhart, D.H. Lehmer, J.L. Selfridge,
+ *   "New Primality Criteria and Factorizations of 2^m +/- 1"
+ * Mathematics of Computation, v29, n130, April 1975, pp 620-647.
+ * http://www.ams.org/journals/mcom/1975-29-130/S0025-5718-1975-0384673-1/S0025-5718-1975-0384673-1.pdf
+ *
+ * Page 622-623, Theorem 3:
+ *  "Let N-1 = mp, where p is an odd prime such that 2p+1 > sqrt(N).
+ *   If there exists an a for which a^((N-1)/2) = -1 mod N,
+ *   but a^(m/2) != -1 mod N, then N is prime."
+ */
 void verify_bls3(void) {
   if (mpz_even_p(Q))            quit_invalid("BLS3", "Q odd");
   if (mpz_cmp_ui(Q, 2) <= 0)    quit_invalid("BLS3", "Q > 2");
@@ -966,11 +1087,38 @@ void verify_bls3(void) {
   if (mpz_cmp(T1, T2) == 0)     quit_invalid("BLS3", "A^(M/2) != N-1 mod N");
 }
 
-/* Sophisticated N-1 using N, QARRAY, AARRAY */
+/* Sophisticated N-1 using N, QARRAY, AARRAY
+ *
+ * John Brillhart, D.H. Lehmer, J.L. Selfridge,
+ *   "New Primality Criteria and Factorizations of 2^m +/- 1"
+ * Mathematics of Computation, v29, n130, April 1975, pp 620-647.
+ * http://www.ams.org/journals/mcom/1975-29-130/S0025-5718-1975-0384673-1/S0025-5718-1975-0384673-1.pdf
+ *
+ * Page 621-622: "The expression 'N is a psp base a' will be used for a
+ * number N which satisfies the congruence a^(N-1) = 1 mod N, 1 < a < N-1,
+ * i.e., N is a "pseudoprime" base a."
+ * Page 623: "Throughout the rest of this paper the notation N-1 = F_1 R_1
+ * will be used, where F_1 is the even factored portion of N-1, R_1 is > 1,
+ * and (F_1,R_1) = 1."
+ * Page 623: "(I) For each prime p_i dividing F_1 there exists an a_i such
+ * that N is a psp base a_i and (a_i^((N-1)/p_i),N) = 1."
+ * Page 624, Theorem 5.
+ *  "Assume (I) and let m be >= 1.
+ *   When m > 1, assume further that λF_1 + 1 ∤ N for 1 <= λ < m.
+ *   If N < (mF_1 + 1) [2(F_1)^2 + (r-m)F_1 + 1],
+ *   where r and s are defined by R_1 = (N-1)/F_1 = 2(F_1)s + r, 1 <= r < 2F_1,
+ *   then N is prime if and only if s = 0 or r^2 - 8s is not a perfect square.
+ *   r != 0 since R_1 is odd."
+ *
+ * Note that we are using m=1, which is simple for the verifier.
+ *
+ */
 void verify_bls5(int num_qs) {
   int i;
   mpz_t F, R, s, r;
 
+  if (mpz_cmp_ui(N, 2) <= 0)   quit_invalid("BLS5", "N > 2");
+  if (mpz_even_p(N))           quit_invalid("BLS5", "N odd");
   mpz_sub_ui(T2, N, 1);
   mpz_init_set_ui(F, 1);
   mpz_init_set(R, T2);
@@ -979,7 +1127,7 @@ void verify_bls5(int num_qs) {
     if (mpz_cmp_ui(QARRAY[i], 1 ) <= 0)  quit_invalid("BLS5", "Q > 1");
     if (mpz_cmp(   QARRAY[i], T2) >= 0)  quit_invalid("BLS5", "Q < N-1");
     if (mpz_cmp_ui(AARRAY[i], 1 ) <= 0)  quit_invalid("BLS5", "A > 1");
-    if (mpz_cmp(   AARRAY[i], N ) >= 0)  quit_invalid("BLS5", "A < N");
+    if (mpz_cmp(   AARRAY[i], T2) >= 0)  quit_invalid("BLS5", "A < N-1");
     if (!mpz_divisible_p(T2, QARRAY[i])) quit_invalid("BLS5", "Q divides N-1");
     while (mpz_divisible_p(R, QARRAY[i])) {
       mpz_mul(F, F, QARRAY[i]);
@@ -987,8 +1135,8 @@ void verify_bls5(int num_qs) {
     }
   }
   mpz_mul(T1, R, F);
-  if (mpz_cmp(T1, T2) != 0) quit_invalid("BLS5", "R == (N-1)/F");
-  if (mpz_odd_p(F))         quit_invalid("BLS5", "F is even");
+  if (mpz_cmp(T1, T2) != 0)    quit_invalid("BLS5", "R == (N-1)/F");
+  if (mpz_odd_p(F))            quit_invalid("BLS5", "F is even");
   mpz_gcd(T1, F, R);
   if (mpz_cmp_ui(T1, 1) != 0)  quit_invalid("BLS5", "gcd(F, R) = 1");
   mpz_mul_ui(T1, F, 2);
@@ -1001,7 +1149,7 @@ void verify_bls5(int num_qs) {
   mpz_add_ui(T1, T1, 1);  /* T1 = 2*F*F + (r-1)*F + 1 */
   mpz_add_ui(T2, F, 1);
   mpz_mul(T1, T1, T2);    /* T1 = (F+1) * (2*F*F + (r-1)*F + 1) */
-  if (mpz_cmp(N, T1) >= 0) quit_invalid("BLS5", "N < P");
+  if (mpz_cmp(N, T1) >= 0) quit_invalid("BLS5", "N < (F+1)(2F^2+(r-1)F+1)");
   if (mpz_sgn(s) != 0) {
     mpz_mul(T2, r, r);
     mpz_submul_ui(T2, s, 8);  /* T2 = r*r - 8*s */
@@ -1021,7 +1169,16 @@ void verify_bls5(int num_qs) {
   }
 }
 
-/* Most basic N-1 using N, QARRAY, A */
+/* Most basic N-1 using N, QARRAY, A
+ *
+ * D.H. Lehmer, "Tests for Primality by the Converse of Fermat's Theorem"
+ * Bull. AMS, v33, n3, 1927, pp 327-340.
+ * http://projecteuclid.org/DPubS?service=UI&version=1.0&verb=Display&handle=euclid.bams/1183492108
+ *
+ * Page 330, Theorem 2:
+ *  "If a^x = 1 mod N for x = N-1, but not for x a quotient of N-1 on
+ *   division by any of its prime factors, then N is a prime."
+ */
 void verify_lucas(int num_qs) {
   int i;
   mpz_sub_ui(T2, N, 1);
@@ -1134,7 +1291,8 @@ void add_chain(mpz_t n, mpz_t q) {
   _num_chains++;
 }
 void free_chains(void) {
-  while (_num_chains-- > 0) {
+  while (_num_chains > 0) {
+    _num_chains--;
     mpz_clear(_chain_n[_num_chains]);
     mpz_clear(_chain_q[_num_chains]);
   }
@@ -1213,34 +1371,46 @@ void read_vars(const char* vars) {
   int i;
   int nargs = 0;
   int vfound = 0;
+  int bad_lines = 0;
 
   vlist[0] = strtok(varstring, " ");
   while (vlist[nargs] != 0)
     vlist[++nargs] = strtok(NULL, " ");
   while (vfound < nargs) {
     get_line(0);
+    if (strlen(_line) == 0)    /* Skip extrenuous blank lines */
+      continue;
     if (_format == CERT_PRIMO) {
-      if (sscanf(_line, "%c$=%s", &varname, _vstr) != 2)
-        quit_error("Can't read variables", "");
-      for (i = 0; i < nargs; i++) {
-        if (vlist[i] != 0 && varname == vlist[i][0]) {
-          switch (varname) {
-            case 'S':  mpz_set_str(S, _vstr, 16);  break;
-            case 'R':  mpz_set_str(R, _vstr, 16);  break;
-            case 'A':  mpz_set_str(A, _vstr, 16);  break;
-            case 'B':  mpz_set_str(B, _vstr, 16);  break;
-            case 'Q':  mpz_set_str(Q, _vstr, 16);  break;
-            case 'T':  mpz_set_str(T, _vstr, 16);  break;
-            case 'J':  mpz_set_str(J, _vstr, 16);  break;
-            default: quit_error("Internal error: bad Primo variable type",""); break;
+      int varnum = 0;  /* Did we read a variable properly this line? */
+      if (sscanf(_line, "%c$=%s", &varname, _vstr) == 2) {
+        for (i = 0; i < nargs && varnum == 0; i++) {
+          if (vlist[i] != 0 && varname == vlist[i][0]) {
+            switch (varname) {
+              case 'S':  mpz_set_str(S, _vstr, 16);  break;
+              case 'R':  mpz_set_str(R, _vstr, 16);  break;
+              case 'A':  mpz_set_str(A, _vstr, 16);  break;
+              case 'B':  mpz_set_str(B, _vstr, 16);  break;
+              case 'Q':  mpz_set_str(Q, _vstr, 16);  break;
+              case 'T':  mpz_set_str(T, _vstr, 16);  break;
+              case 'J':  mpz_set_str(J, _vstr, 16);  break;
+              default: quit_error("Internal error: bad Primo variable type","");
+                       break;
+            }
+            varnum = i+1;
           }
-          vfound++;      /* We found a variable on the list */
-          vlist[i] = 0;  /* It should only appear once */
-          break;
         }
+      } else if (sscanf(_line, "[%d]", &i) == 1) {
+        quit_error("Variables missing from proof step", "");
       }
-      if (i >= nargs)
-        quit_error("Unknown variable in line: ", _line);
+      if (varnum != 0) {
+        vfound++;             /* We found a variable on the list */
+        vlist[varnum-1] = 0;  /* It should only appear once */
+        bad_lines = 0;
+      } else {
+        if (_verbose) { printf("%60s\r", ""); printf("skipping bad line: %s\n", _line); }
+        if (bad_lines++ >= BAD_LINES_ALLOWED)
+          quit_error("Too many bad lines reading variables", "");
+      }
     } else {
       if      (sscanf(_line, "N %s", _vstr) == 1) PROCESS_VAR(N);
       else if (sscanf(_line, "A %s", _vstr) == 1) PROCESS_VAR(A);
@@ -1304,7 +1474,14 @@ void parse_top(void)
       }
     }
   }
-  gmp_printf("N: %Zd (%d digits)\n", PROOFN, (int)mpz_sizeinbase(PROOFN, 10));
+  if (!_quiet) {
+    printf("%60s\r", "");
+    printf("N: ");
+    if (_verbose) gmp_printf("%Zd ", PROOFN);
+    printf("(%d digits)\n", (int)mpz_sizeinbase(PROOFN, 10));
+    printf("Verifying probable prime status.\r");
+    fflush(stdout);
+  }
   if (is_prob_prime(PROOFN) == 0)
     quit_composite();
   mpz_set(N, PROOFN);
@@ -1312,7 +1489,7 @@ void parse_top(void)
 
 void process_file(const char* filename)
 {
-  int step = 0;
+  _step = 0;
   if (strcmp(filename, "-") == 0)
     _fh = stdin;
   else if ((_fh = fopen(filename, "r")) == NULL)
@@ -1327,12 +1504,12 @@ void process_file(const char* filename)
       int rstep;
       get_line(0);
       if (sscanf(_line, "[%d]", &rstep) == 1) {
-        if (rstep != step+1)
+        if (rstep != _step+1)
           quit_error("Wrong step number found", "");
-        step++;
+        _step++;
       }
       if (sscanf(_line, "Type=%d", &type) == 1) {
-        if (!_quiet) { printf("%60s\r", ""); printf("Step %3d/%-3d %5d digits  Type %d\r", step, _testcount, (int)mpz_sizeinbase(N,10), type); fflush(stdout); }
+        if (!_quiet) { printf("%60s\r", ""); printf("Step %3d/%-3d %5d digits  Type %d\r", _step, _testcount, (int)mpz_sizeinbase(N,10), type); fflush(stdout); }
         switch (type) {
           case 4:  read_vars("S R J T");   verify_ecpp4();  break;
           case 3:  read_vars("S R A B T"); verify_ecpp3();  break;
@@ -1357,7 +1534,9 @@ void process_file(const char* filename)
             s++;
           }
         }
-        if (!_quiet) { printf("%60s\r", ""); printf("Step %3d/%-3d %5d digits  Type %s\r", step, _testcount, (int)mpz_sizeinbase(N,10), type); fflush(stdout); }
+        _step++;
+        /* TODO: Quick parse of the file to count steps? */
+        if (!_quiet) { printf("%60s\r", ""); printf("Step %-4d %5d digits  Type %s\r", _step, (int)mpz_sizeinbase(N,10), type); fflush(stdout); }
         if        (strcmp(type, "ECPP" ) == 0) { read_vars("N A B M Q X Y");
                                                  verify_ecpp();
                                                  add_chain(N, Q);
@@ -1439,7 +1618,7 @@ static void dieusage(const char* prog) {
   printf("Usage: %s [options] <file>\n\n", prog);
   printf("Options:\n");
   printf("   -v     set verbose\n");
-  printf("   -q     set quiet\n");
+  printf("   -q     set quiet (no output, only exit code)\n");
   printf("   -help  this message\n");
   var_free();
   exit(RET_INVALID);

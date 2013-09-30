@@ -11,7 +11,8 @@
 #include "small_factor.h"
 #include "simpqs.h"
 #include "ecm.h"
-#define _GMP_ECM_FACTOR _GMP_ecm_factor_projective
+#define _GMP_ECM_FACTOR(n, f, b1, ncurves) \
+   _GMP_ecm_factor_projective(n, f, b1, 0, ncurves)
 #include "utility.h"
 
 /*
@@ -327,7 +328,7 @@ static int bls_theorem5_limit(mpz_t n, mpz_t A, mpz_t B,
 {
   mpz_mul(t, A, B);
   mpz_add_ui(t, t, 1);
-  if (mpz_cmp(t, n) != 0) croak("BLS75:  A*B != n-1\n");
+  if (mpz_cmp(t, n) != 0) croak("BLS75 internal error: A*B != n-1\n");
 
   mpz_mul_ui(t, A, 2);
   mpz_tdiv_qr(s, r, B, t);
@@ -422,7 +423,8 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
       break;
     /* Put the two factors f and m/f into the stacks, smallest first */
     mpz_divexact(m, m, f);
-    if (mpz_cmp(m, f) < 0) { mpz_set(t, m); mpz_set(m, f); mpz_set(f, t); }
+    if (mpz_cmp(m, f) < 0)
+      mpz_swap(m, f);
     primality_handle_factor(f, _GMP_primality_bls_nm1, 0);
     primality_handle_factor(m, _GMP_primality_bls_nm1, 0);
   }
@@ -435,13 +437,15 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
   /* Sort factors found from largest to smallest, but 2 must be at start. */
   {
     int i, j;
-    for (i = 2; i < fsp; i++) {
-      for (j = i; j > 1 && mpz_cmp(fstack[j-1], fstack[j]) < 0; j--) {
-        mpz_set(t, fstack[j-1]);
-        mpz_set(fstack[j-1], fstack[j]);
-        mpz_set(fstack[j], t);
+    for (i = 2; i < fsp; i++)
+      for (j = i; j > 1 && mpz_cmp(fstack[j-1], fstack[j]) < 0; j--)
+        mpz_swap( fstack[j-1], fstack[j] );
+    for (i = 2; i < fsp; i++)   /* Remove any duplicate factors */
+      if (mpz_cmp(fstack[i], fstack[i-1]) == 0) {
+        for (j = i+1; j < fsp; j++)
+          mpz_set(fstack[j-1], fstack[j]);
+        fsp--;
       }
-    }
   }
 
   /* Shrink to smallest set and verify conditions. */
@@ -462,7 +466,7 @@ int _GMP_primality_bls_nm1(mpz_t n, int effort, char** prooftextptr)
       mpz_clear(fstack[--fsp]);
     /* Verify Q[0] = 2 */
     if (mpz_cmp_ui(fstack[0], 2) != 0)
-      croak("Internal error: 2 not at start of fstack");
+      croak("BLS75 internal error: 2 not at start of fstack");
     /* Verify conditions */
     success = 0;
     if (bls_theorem5_limit(n, A, B, t, m, r, s)) {
@@ -709,7 +713,8 @@ int _GMP_primality_bls_np1_split(mpz_t n, int effort, mpz_t q, IV* lp, IV* lq)
       success = try_factor2(f, q, effort);
     if (success) {
       mpz_divexact(q, q, f);
-      if (mpz_cmp(q, f) < 0) { mpz_set(t, q); mpz_set(q, f); mpz_set(f, t); }
+      if (mpz_cmp(q, f) < 0)
+        mpz_swap(q, f);
       mpz_mul(m, m, f);
     }
   }
@@ -758,7 +763,8 @@ int _GMP_primality_bls_nm1_split(mpz_t n, int effort, mpz_t p, UV *reta)
       success = try_factor2(f, p, effort);
     if (success) {
       mpz_divexact(p, p, f);
-      if (mpz_cmp(p, f) < 0) { mpz_set(t, p); mpz_set(p, f); mpz_set(f, t); }
+      if (mpz_cmp(p, f) < 0)
+        mpz_swap(p, f);
       mpz_mul(m, m, f);
     }
   }

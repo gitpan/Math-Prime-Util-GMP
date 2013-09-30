@@ -15,7 +15,9 @@
 #include "bls75.h"
 #include "ecpp.h"
 #include "utility.h"
-#define _GMP_ECM_FACTOR _GMP_ecm_factor_projective
+#define _GMP_ECM_FACTOR(n, f, b1, ncurves) \
+   _GMP_ecm_factor_projective(n, f, b1, 0, ncurves)
+
 
 /* Instead of trying to suck in lots of Math::BigInt::GMP and be terribly
  * clever (and brittle), just do all C<->Perl bigints via strings.  It's
@@ -95,11 +97,22 @@ _GMP_miller_rabin(IN char* strn, IN char* strbase)
   OUTPUT:
     RETVAL
 
-#define PRIMALITY_START(name, small_retval) \
+int miller_rabin_random(IN char* strn, IN UV nbases, IN char* seedstr = 0)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    VALIDATE_AND_SET("miller_rabin_random", n, strn);
+    RETVAL = _GMP_miller_rabin_random(n, nbases, seedstr);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
+#define PRIMALITY_START(name, small_retval, test_small_factors) \
     /* Negative numbers return 0 */ \
     if ((strn != 0) && (strn[0] == '-') ) \
       XSRETURN_IV(0); \
     validate_string_number(name " (n)", strn); \
+    /* Handle single digit numbers */ \
     if (strn[1] == 0) { \
       int q_is_prime = 0; \
       switch (strn[0]) { \
@@ -107,6 +120,19 @@ _GMP_miller_rabin(IN char* strn, IN char* strbase)
                                                 break; \
       } \
       XSRETURN_IV(q_is_prime); \
+    } \
+    /* Test for small multiples while it is still a string */ \
+    if (test_small_factors) { \
+      UV digsum = 0; \
+      int i, slen = strlen(strn); \
+      /* Multiples of 2 and 5 return 0 */ \
+      switch (strn[slen]) { \
+        case '0': case '2': case '4': case '5': case '6': case '8': \
+           XSRETURN_IV(0); break; \
+      } \
+      /* Multiples of 3 return 0 */ \
+      for (i = 0; i < slen; i++)  digsum += strn[i]-'0'; \
+      if (digsum % 3 == 0)  XSRETURN_IV(0); \
     } \
     mpz_init_set_str(n, strn, 10);
 
@@ -121,7 +147,7 @@ is_lucas_pseudoprime(IN char* strn)
   CODE:
     if ((strn != 0) && (strn[0] == '-') )
       croak("Parameter '%s' must be a positive integer\n", strn);
-    PRIMALITY_START("is_lucas_pseudoprime", 1);
+    PRIMALITY_START("is_lucas_pseudoprime", 1, 0);
     switch (ix) {
       case 0: RETVAL = _GMP_is_lucas_pseudoprime(n, 0); break;
       case 1: RETVAL = _GMP_is_lucas_pseudoprime(n, 1); break;
@@ -142,7 +168,7 @@ is_almost_extra_strong_lucas_pseudoprime(IN char* strn, IN UV increment = 1)
       croak("Parameter '%s' must be a positive integer\n", strn);
     if (increment == 0 || increment > 65535)
       croak("Increment parameter must be >0 and < 65536");
-    PRIMALITY_START("is_almost_extra_strong_lucas_pseudoprime", 1);
+    PRIMALITY_START("is_almost_extra_strong_lucas_pseudoprime", 1, 0);
     RETVAL = _GMP_is_almost_extra_strong_lucas_pseudoprime(n, increment);
     mpz_clear(n);
   OUTPUT:
@@ -160,7 +186,8 @@ is_prime(IN char* strn)
     mpz_t n;
     int ret;
   CODE:
-    PRIMALITY_START("is_prime", 2);
+    /* Returns arg for single-dig primes, 0 for multiples of 2, 3, 5, or neg */
+    PRIMALITY_START("is_prime", 2, 1);
     switch (ix) {
       case 0: ret = _GMP_is_prime(n); break;
       case 1: ret = _GMP_is_prob_prime(n); break;
@@ -181,7 +208,7 @@ _is_provable_prime(IN char* strn, IN int wantproof = 0)
     int result;
     mpz_t n;
   PPCODE:
-    PRIMALITY_START("is_provable_prime", 2);
+    PRIMALITY_START("is_provable_prime", 2, 1);
     if (wantproof == 0) {
       result = _GMP_is_provable_prime(n, 0);
       XPUSHs(sv_2mortal(newSViv( result )));
@@ -375,12 +402,7 @@ lucas_sequence(IN char* strn, IN IV P, IN IV Q, IN char* strk)
     if (mpz_cmp_ui(n, 3) <= 0) { \
       XPUSH_MPZ(n); \
     } else { \
-      /* Skip the trivial division tests */ \
-      /* while (mpz_divisible_ui_p(n, 2)) { mpz_divexact_ui(n, n, 2); XPUSHs(sv_2mortal(newSVuv( 2 ))); } */ \
-      /* while (mpz_divisible_ui_p(n, 3)) { mpz_divexact_ui(n, n, 3); XPUSHs(sv_2mortal(newSVuv( 3 ))); } */ \
-      /* while (mpz_divisible_ui_p(n, 5)) { mpz_divexact_ui(n, n, 5); XPUSHs(sv_2mortal(newSVuv( 5 ))); } */ \
-      if (mpz_cmp_ui(n, 1) == 0) { /* done */ } \
-      else if (_GMP_is_prob_prime(n)) { XPUSH_MPZ(n); } \
+      if (_GMP_is_prob_prime(n)) { XPUSH_MPZ(n); } \
       else { \
         mpz_t f; \
         int success = 0; \
@@ -391,8 +413,8 @@ lucas_sequence(IN char* strn, IN IV P, IN IV Q, IN char* strk)
           XPUSHs(sv_2mortal(newSVpv(strn, 0))); \
         } else { \
           mpz_divexact(n, n, f); \
-          XPUSH_MPZ(n); \
           XPUSH_MPZ(f); \
+          XPUSH_MPZ(n); \
         } \
         mpz_clear(f); \
       } \
@@ -406,11 +428,20 @@ trial_factor(IN char* strn, IN UV maxn = 0)
     mpz_t n;
     UV factor;
   PPCODE:
-    SIMPLE_FACTOR_START("trial_factor");
-    factor = _GMP_trial_factor(n, 2, (maxn == 0) ? 2147483647 : maxn);
-    mpz_set_ui(f, factor);
-    success = (factor != 0);
-    SIMPLE_FACTOR_END;
+    VALIDATE_AND_SET("trial_factor", n, strn);
+    if (mpz_cmp_ui(n, 3) <= 0) {
+      XPUSH_MPZ(n);
+    } else {
+      factor = _GMP_trial_factor(n, 2, (maxn == 0) ? 2147483647 : maxn);
+      if (factor == 0) {
+        XPUSHs(sv_2mortal(newSVpv(strn, 0)));
+      } else {
+        XPUSHs(sv_2mortal(newSVuv( factor )));
+        mpz_divexact_ui(n, n, factor);
+        XPUSH_MPZ(n);
+      }
+    }
+    mpz_clear(n);
 
 void
 prho_factor(IN char* strn, IN UV maxrounds = 64*1024*1024)
@@ -474,13 +505,13 @@ ecm_factor(IN char* strn, IN UV bmax = 0, IN UV ncurves = 100)
   PPCODE:
     SIMPLE_FACTOR_START("ecm_factor");
     if (bmax == 0) {
-                    success = _GMP_ecm_factor_projective(n, f,     1000, 40);
-      if (!success) success = _GMP_ecm_factor_projective(n, f,    10000, 40);
-      if (!success) success = _GMP_ecm_factor_projective(n, f,   100000, 40);
-      if (!success) success = _GMP_ecm_factor_projective(n, f,  1000000, 40);
-      if (!success) success = _GMP_ecm_factor_projective(n, f, 10000000, 100);
+                    success = _GMP_ECM_FACTOR(n, f,     1000, 40);
+      if (!success) success = _GMP_ECM_FACTOR(n, f,    10000, 40);
+      if (!success) success = _GMP_ECM_FACTOR(n, f,   100000, 40);
+      if (!success) success = _GMP_ECM_FACTOR(n, f,  1000000, 40);
+      if (!success) success = _GMP_ECM_FACTOR(n, f, 10000000, 100);
     } else {
-      success = _GMP_ecm_factor_projective(n, f, bmax, ncurves);
+      success = _GMP_ECM_FACTOR(n, f, bmax, ncurves);
     }
     SIMPLE_FACTOR_END;
 
