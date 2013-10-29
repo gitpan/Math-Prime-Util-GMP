@@ -3,11 +3,10 @@ abstract: 'Utilities related to prime numbers, using GMP'
 author:
   - 'Dana A Jacobsen <dana@acm.org>'
 build_requires:
-  Test::More: 0.45
-configure_requires:
   ExtUtils::MakeMaker: 0
+  Test::More: 0.45
 dynamic_config: 1
-generated_by: 'ExtUtils::MakeMaker version 6.68, CPAN::Meta::Converter version 2.131560'
+generated_by: 'ExtUtils::MakeMaker version 6.68, CPAN::Meta::Converter version 2.132661'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -18,7 +17,7 @@ no_index:
     - t
     - inc
 recommends:
-  Math::Prime::Util: 0.024
+  Math::Prime::Util: 0.31
 requires:
   Carp: 0
   Exporter: 5.562
@@ -27,5 +26,6 @@ requires:
   perl: 5.006002
 resources:
   homepage: https://github.com/danaj/Math-Prime-Util-GMP
+  license: http://dev.perl.org/licenses/
   repository: https://github.com/danaj/Math-Prime-Util-GMP
-version: 0.15
+version: 0.16

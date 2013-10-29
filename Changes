@@ -1,5 +1,21 @@
 Revision history for Perl module Math::Prime::Util::GMP
 
+0.16 2013-10-28
+
+    [ADDED]
+
+    - partitions    partition function p(n), OEIS A000041
+
+    [FIXES]
+
+    - Fixed memory leak in Lucas sequence (is_prime, next_prime, etc.).
+
+    - is_aks_prime wasn't properly checking divisibility for composites.
+
+    [Scripts and Programs Added]
+
+    - verify_primegap.pl    parallel prime gap verification
+
 0.15 2013-09-30
 
     [Functions Added]

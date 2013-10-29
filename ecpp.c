@@ -647,12 +647,12 @@ static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t
           continue;
         }
         if (verbose)
-          { printf("%*sN[%d] (%d dig) n-1", i, "", i, nidigits); fflush(stdout); }
+          { printf("%*sN[%d] (%d dig) n+1", i, "", i, nidigits); fflush(stdout); }
         curveresult = _GMP_primality_bls_15(Ni, q, &np1lp, &np1lq);
         if (verbose) { printf("  %d\n", curveresult); fflush(stdout); }
         if ( ! curveresult ) {
           /* This ought not happen */
-          if (verbose) gmp_printf("\n  Could not prove n-1 with N = %Zd\n", Ni);
+          if (verbose) gmp_printf("\n  Could not prove n+1 with N = %Zd\n", Ni);
           downresult = 1;
           continue;
         }
