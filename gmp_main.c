@@ -264,7 +264,7 @@ static int lucas_extrastrong_params(IV* P, IV* Q, mpz_t n, mpz_t t, UV inc)
 {
   UV tP = 3;
   if (inc < 1 || inc > 256)
-    croak("Invalid lucas paramater increment: %"UVuf"\n", inc);
+    croak("Invalid lucas parameter increment: %"UVuf"\n", inc);
   while (1) {
     UV D = tP*tP - 4;
     UV gcd = mpz_gcd_ui(NULL, n, D);
@@ -504,19 +504,19 @@ int _GMP_is_frobenius_underwood_pseudoprime(mpz_t n)
   mpz_mod( result, temp1, n );
   if (mpz_sgn(x) == 0) {
     for (bit = len-2; bit >= 0; bit--) {
-      mpz_add( temp2, b, b );
-      mpz_mul( na, a, temp2 );
-      mpz_add( temp1, b, a );
-      mpz_sub( temp2, b, a );
-      mpz_mul( b, temp1, temp2 );
-      mpz_mod( b, b, n );
-      mpz_mod( a, na, n );
+      mpz_mul_ui(temp1, b, 2);
+      mpz_add(temp2, b, a);
+      mpz_sub(b, b, a);
+      mpz_mul(temp2, b, temp2);
+      mpz_mod(b, temp2, n);
+      mpz_mul(temp1, a, temp1);
+      mpz_mod(a, temp1, n);
       if ( mpz_tstbit(n_plus_1, bit) ) {
-        mpz_mul_ui( temp1, a, 2 );
-        mpz_add( na, temp1, b );
-        mpz_add( temp1, b, b );
-        mpz_sub( b, temp1, a );
-        mpz_set( a, na );
+        mpz_set(temp1, b);
+        mpz_mul_ui(temp2, b, 2 );
+        mpz_sub(b, temp2, a);
+        mpz_mul_ui(temp2, a, 2 );
+        mpz_add(a, temp2, temp1);
       }
     }
   } else {
@@ -586,9 +586,17 @@ UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
   /* All native math if n fits in an unsigned long */
   if (log2n <= sizeof(unsigned long)*8) {
     unsigned long un = mpz_get_ui(n);
-    unsigned long sqrtn = (unsigned long) sqrt((double)un);
-    while (sqrtn*sqrtn > un) sqrtn--;
-    while ((sqrtn+1)*(sqrtn+1) <= un)  sqrtn++;
+    unsigned long sqrtn;
+#if BITS_PER_WORD == 32
+    if (un >= UVCONST(4294836225))           {  sqrtn = UVCONST(65535);
+#else
+    if (un >= UVCONST(18446744065119617025)) {  sqrtn = UVCONST(4294967295);
+#endif
+    } else {
+      sqrtn = (unsigned long) sqrt((double)un);
+      while (sqrtn*sqrtn > un) sqrtn--;
+      while ((sqrtn+1)*(sqrtn+1) <= un)  sqrtn++;
+    }
     if (to_n > sqrtn)
       to_n = sqrtn;
     while (p <= to_n) {
@@ -784,17 +792,21 @@ int _GMP_is_prob_prime(mpz_t n)
   }
 
   /*  Step 2: The BPSW test.  spsp base 2 and slpsp. */
+  return _GMP_BPSW(n);
+}
 
-  /* Miller Rabin with base 2 */
-  if (_GMP_miller_rabin_ui(n, 2) == 0)
+int _GMP_BPSW(mpz_t n)
+{
+  if (mpz_cmp_ui(n, 4) < 0)
+    return (mpz_cmp_ui(n, 1) <= 0) ? 0 : 1;
+
+  if (_GMP_miller_rabin_ui(n, 2) == 0)   /* Miller Rabin with base 2 */
     return 0;
 
-  /* Extra-Strong Lucas test */
   if (_GMP_is_lucas_pseudoprime(n, 2 /*extra strong*/) == 0)
     return 0;
 
-  /* BPSW is deterministic below 2^64 */
-  if (mpz_sizeinbase(n, 2) <= 64)
+  if (mpz_sizeinbase(n, 2) <= 64)        /* BPSW is deterministic below 2^64 */
     return 2;
 
   return 1;

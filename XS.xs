@@ -152,8 +152,8 @@ is_lucas_pseudoprime(IN char* strn)
       case 0: RETVAL = _GMP_is_lucas_pseudoprime(n, 0); break;
       case 1: RETVAL = _GMP_is_lucas_pseudoprime(n, 1); break;
       case 2: RETVAL = _GMP_is_lucas_pseudoprime(n, 2); break;
-      case 3: RETVAL = _GMP_is_frobenius_underwood_pseudoprime(n); break;
-      default:RETVAL = 0; break;
+      case 3:
+      default:RETVAL = _GMP_is_frobenius_underwood_pseudoprime(n); break;
     }
     mpz_clear(n);
   OUTPUT:
@@ -182,6 +182,7 @@ is_prime(IN char* strn)
     is_aks_prime = 2
     is_nminus1_prime = 3
     is_ecpp_prime = 4
+    is_bpsw_prime = 5
   PREINIT:
     mpz_t n;
     int ret;
@@ -194,7 +195,8 @@ is_prime(IN char* strn)
       case 2: ret = _GMP_is_aks_prime(n); break;
       case 3: ret = _GMP_primality_bls_nm1(n, 100, 0); break;
       case 4: ret = _GMP_ecpp(n, 0); break;
-      default: croak("is_prime: Unknown function alias"); break;
+      case 5:
+      default:ret = _GMP_BPSW(n); break;
     }
     RETVAL = ret;
     mpz_clear(n);
@@ -244,7 +246,6 @@ _validate_ecpp_curve(IN char* stra, IN char* strb, IN char* strn, IN char* strpx
     mpz_clear(m); mpz_clear(q);
   OUTPUT:
     RETVAL
-
 
 #define XPUSH_MPZ(n) \
   { \
@@ -304,38 +305,69 @@ prime_count(IN char* strlow, IN char* strhigh)
     mpz_clear(high);
     mpz_clear(low);
 
-
-void
-consecutive_integer_lcm(IN UV B)
-  PREINIT:
-    mpz_t m;
-  PPCODE:
-    mpz_init(m);
-    _GMP_lcm_of_consecutive_integers(B, m);
-    XPUSH_MPZ(m);
-    mpz_clear(m);
-
 void
 primorial(IN char* strn)
+  ALIAS:
+    pn_primorial = 1
+    consecutive_integer_lcm = 2
   PREINIT:
-    mpz_t prim, n;
+    mpz_t res, n;
+    UV un;
   PPCODE:
     VALIDATE_AND_SET("primorial", n, strn);
-    mpz_init(prim);
-    _GMP_primorial(prim, n);
-    XPUSH_MPZ(prim);
+    un = mpz_get_ui(n);
+    mpz_init(res);
+    switch (ix) {
+      case 0:  _GMP_primorial(res, n);  break;
+      case 1:  _GMP_pn_primorial(res, un);  break;
+      case 2:
+      default: _GMP_lcm_of_consecutive_integers(un, res);
+    }
+    XPUSH_MPZ(res);
     mpz_clear(n);
-    mpz_clear(prim);
+    mpz_clear(res);
+
 
 void
-pn_primorial(IN UV n)
+gcd(...)
+  PROTOTYPE: @
+  ALIAS:
+    lcm = 1
   PREINIT:
-    mpz_t prim;
+    int i;
+    mpz_t ret, n;
   PPCODE:
-    mpz_init(prim);
-    _GMP_pn_primorial(prim, n);
-    XPUSH_MPZ(prim);
-    mpz_clear(prim);
+    if (items == 0)
+      XSRETURN_UV(0);
+    mpz_init(n);
+    mpz_init_set_ui(ret, (ix == 0) ? 0 : 1);
+    for (i = 0; i < items; i++) {
+      char* strn = SvPV_nolen(ST(i));
+      if (strn != 0 && strn[0] == '-') strn++;
+      validate_string_number("gcd/lcm", strn);
+      mpz_set_str(n, strn, 10);
+      if (ix == 0) mpz_gcd(ret, ret, n);
+      else         mpz_lcm(ret, ret, n);
+    }
+    XPUSH_MPZ(ret);
+    mpz_clear(n);
+    mpz_clear(ret);
+
+int
+kronecker(IN char* stra, IN char* strb)
+  PREINIT:
+    mpz_t a, b;
+    int res;
+  CODE:
+    validate_string_number("kronecker", (stra[0]=='-') ? stra+1 : stra);
+    validate_string_number("kronecker", (strb[0]=='-') ? strb+1 : strb);
+    mpz_init_set_str(a, stra, 10);
+    mpz_init_set_str(b, strb, 10);
+    RETVAL = mpz_kronecker(a, b);
+    mpz_clear(b);
+    mpz_clear(a);
+  OUTPUT:
+    RETVAL
 
 void partitions(IN UV n)
   PREINIT:

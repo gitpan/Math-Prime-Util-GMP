@@ -1,5 +1,22 @@
 Revision history for Perl module Math::Prime::Util::GMP
 
+0.17 2014-02
+
+    [ADDED]
+
+    - is_bpsw_prime     specific BPSW-only test
+    - gcd               20-50x faster than Math::BigInt
+    - lcm               3-800x faster than Math::BigInt
+    - kronecker
+
+    [FIXES]
+
+    - Factoring with a number or intermediate near the word boundary would
+      hang or run very slow.  Thanks to Hugo van der Sanden for the report.
+
+    - Next version of vcert.c, which handles some new Primo changes.
+
+
 0.16 2013-10-28
 
     [ADDED]

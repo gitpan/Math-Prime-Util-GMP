@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.16';
+  $Math::Prime::Util::GMP::VERSION = '0.17';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -14,6 +14,7 @@ use base qw( Exporter );
 our @EXPORT_OK = qw(
                      is_prime
                      is_prob_prime
+                     is_bpsw_prime
                      is_provable_prime
                      is_provable_prime_with_cert
                      is_aks_prime
@@ -44,6 +45,7 @@ our @EXPORT_OK = qw(
                      pn_primorial
                      consecutive_integer_lcm
                      partitions
+                     gcd lcm kronecker
                    );
                    # Should add:
                    # nth_prime
@@ -163,7 +165,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.16
+Version 0.17
 
 
 =head1 SYNOPSIS
@@ -500,6 +502,15 @@ The computational cost is about 2.5x the cost of a strong pseudoprime test
 little slower than an extra-strong Lucas test, and faster than a strong
 Lucas test.
 
+=head2 is_bpsw_prime
+
+Given a positive number input, returns 0 (composite), 2 (definitely prime),
+or 1 (probably prime), using the BPSW primality test (extra-strong variant).
+
+This function does the extra-strong BPSW test and nothing more.  That is,
+it will skip all pretests and any extra work that the L</is_prob_prime>
+test may add.
+
 
 =head2 is_aks_prime
 
@@ -631,6 +642,32 @@ The two are related with the relationships:
 
   pn_primorial($n)  ==   primorial( nth_prime($n) )
   primorial($n)     ==   pn_primorial( prime_count($n) )
+
+
+=head2 gcd
+
+Given a list of integers, returns the greatest common divisor.  This is
+often used to test for L<coprimality|https://oeis.org/wiki/Coprimality>.
+
+=head2 lcm
+
+Given a list of integers, returns the least common multiple.
+
+=head2 kronecker
+
+Returns the Kronecker symbol C<(a|n)> for two integers.  The possible
+return values with their meanings for odd positive C<n> are:
+
+   0   a = 0 mod n
+   1   a is a quadratic residue modulo n (a = x^2 mod n for some x)
+  -1   a is a quadratic non-residue modulo n
+
+The Kronecker symbol is an extension of the Jacobi symbol to all integer
+values of C<n> from the latter's domain of positive odd values of C<n>.
+The Jacobi symbol is itself an extension of the Legendre symbol, which is
+only defined for odd prime values of C<n>.  This corresponds to Pari's
+C<kronecker(a,n)> function and Mathematica's C<KroneckerSymbol[n,m]>
+function.
 
 
 =head2 consecutive_integer_lcm
@@ -1013,7 +1050,7 @@ ECM implementation, as well as the papers by Brent and Montgomery.
 
 =head1 COPYRIGHT
 
-Copyright 2011-2013 by Dana Jacobsen E<lt>dana@acm.orgE<gt>
+Copyright 2011-2014 by Dana Jacobsen E<lt>dana@acm.orgE<gt>
 
 This program is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
 

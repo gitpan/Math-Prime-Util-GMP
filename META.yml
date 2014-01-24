@@ -6,7 +6,7 @@ build_requires:
   ExtUtils::MakeMaker: 0
   Test::More: 0.45
 dynamic_config: 1
-generated_by: 'ExtUtils::MakeMaker version 6.68, CPAN::Meta::Converter version 2.132661'
+generated_by: 'ExtUtils::MakeMaker version 6.82, CPAN::Meta::Converter version 2.132830'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -17,7 +17,7 @@ no_index:
     - t
     - inc
 recommends:
-  Math::Prime::Util: 0.31
+  Math::Prime::Util: 0.37
 requires:
   Carp: 0
   Exporter: 5.562
@@ -28,4 +28,4 @@ resources:
   homepage: https://github.com/danaj/Math-Prime-Util-GMP
   license: http://dev.perl.org/licenses/
   repository: https://github.com/danaj/Math-Prime-Util-GMP
-version: 0.16
+version: 0.17
