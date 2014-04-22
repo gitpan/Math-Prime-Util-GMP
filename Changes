@@ -1,5 +1,49 @@
 Revision history for Perl module Math::Prime::Util::GMP
 
+0.19 2014-04-21
+
+    [ADDED]
+
+    - is_power
+    - exp_mangoldt
+
+    [FIXES]
+
+    - Fixed string shortcut for simple divisibility.  is_prime and related
+      functions are a bit faster when given inputs divisible by 2 or 5.
+
+    [OTHER]
+
+    - Add improved AKS parameter selection.  About 200x faster, though still
+      thousands of times slower than APR-CL or ECPP.  Updated times for the
+      example in the v0.10 entry: Timing for 10**100+267:
+          AKS:         ~5 days.
+          BLS75 n-1:   ~3 minutes.
+          APR-CL:      0.09 seconds
+          ECPP:        0.05 seconds.
+
+    - ECPP performance adjustments, version 1.03 of standalone ECPP.
+
+    - Updated ECPP class polynomial data.  Default "tiny" table had very minor
+      changes.  The "big" table (in the github xt/ directory, default for
+      standalone ECPP) removed some large coefficient 17-24 degree polys to
+      make room for many more higher-degree polys.  For some ranges this may
+      mean more backtracking, but should expand the input size that is able to
+      find good discriminants without high factoring effort.  "prob" below is
+      summing the estimate 1/2H:   9x more polys and 66x larger size gives on
+      average about 3x more candidates.
+
+      Default "tiny" table:
+        OLD:    30373 bytes   604 polys    24 maxdeg   42.0 prob   1450 prob/MB
+        NEW:    30422 bytes   611 polys    25 maxdeg   42.8 prob   1475 prob/MB
+
+      "big"  table at www.probableprime.org/ecpp/cpd/big/class_poly_data.h.gz
+        OLD:  2032376 bytes  3197 polys   117 maxdeg  104.5 prob     54 prob/MB
+        NEW:  2005072 bytes  5271 polys    85 maxdeg  125.2 prob     65 prob/MB
+
+      "huge" table at www.probableprime.org/ecpp/cpd/huge/class_poly_data.h.gz
+             15724395 bytes 14571 polys   128 maxdeg  207.9 prob     14 prob/MB
+
 0.18 2014-01-27
 
     [FIXES]

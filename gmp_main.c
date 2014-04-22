@@ -13,6 +13,12 @@
 #include "ecpp.h"
 #include "utility.h"
 
+#define AKS_VARIANT_V6          1    /* The V6 paper with Lenstra impr */
+#define AKS_VARIANT_BORNEMANN   2    /* Based on Folkmar Bornemann's impl */
+#define AKS_VARIANT_BERNEXAMPLE 3    /* AKS-Bernstein-Morain */
+
+#define AKS_VARIANT  AKS_VARIANT_BORNEMANN
+
 static mpz_t _bgcd;
 static mpz_t _bgcd2;
 #define BGCD_PRIMES       168
@@ -608,7 +614,7 @@ UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
 
   /* For "small" numbers, this simple method is best. */
   {
-    UV small_to = (log2n < 3000)  ?  to_n  :  10000;
+    UV small_to = (log2n < 3000)  ?  to_n  :  30000;
     while (p <= small_to) {
       if (mpz_divisible_ui_p(n, p))
         break;
@@ -882,20 +888,6 @@ int _GMP_is_provable_prime(mpz_t n, char** prooftext)
   return prob_prime;
 }
 
-#if 0
-  /* This would be useful for a Bernstein AKS variant */
-static UV largest_factor(UV n) {
-  UV p = 2;
-  PRIME_ITERATOR(iter);
-  while (n >= p*p && !prime_iterator_isprime(&iter, n)) {
-    while ( (n % p) == 0  &&  n >= p*p ) { n /= p; }
-    p = prime_iterator_next(&iter);
-  }
-  prime_iterator_destroy(&iter);
-  return n;
-}
-#endif
-
 /*****************************************************************************/
 /*          AKS.    This implementation is quite slow, but useful to have.   */
 
@@ -929,71 +921,204 @@ static int test_anr(UV a, mpz_t n, UV r, mpz_t* px, mpz_t* py)
   return retval;
 }
 
+#if AKS_VARIANT == AKS_VARIANT_BORNEMANN
+static int is_primitive_root(mpz_t n, UV r)
+{
+  mpz_t m, modr;
+  UV p, rm1 = r-1;
+  UV lim = (UV) (sqrt(rm1) + 0.00001);
+  UV ret = 0;
+
+  mpz_init(m);
+  mpz_init_set_ui(modr, r);
+  if ((rm1 % 2) == 0) {
+    mpz_powm_ui(m, n, (rm1/2), modr);
+    if (!mpz_cmp_ui(m,1))
+      goto END_PRIMROOT;
+  }
+  for (p = 3; p <= lim; p += 2) {
+    if ((rm1 % p) == 0) {
+      mpz_powm_ui(m, n, (rm1/p), modr);
+      if (!mpz_cmp_ui(m,1))
+        goto END_PRIMROOT;
+    }
+  }
+  ret = 1;
+END_PRIMROOT:
+  mpz_clear(m);
+  mpz_clear(modr);
+  return ret;
+}
+
+static double mpz_logn(mpz_t n)
+{
+  long exp;
+  double logn = mpz_get_d_2exp(&exp, n);
+  logn = log(logn) + (log(2) * exp);
+  return logn;
+}
+#endif
+
+#if AKS_VARIANT == AKS_VARIANT_BERNEXAMPLE
+static UV largest_factor(UV n) {
+  UV p = 2;
+  PRIME_ITERATOR(iter);
+  while (n >= p*p && !prime_iterator_isprime(&iter, n)) {
+    while ( (n % p) == 0  &&  n >= p*p ) { n /= p; }
+    p = prime_iterator_next(&iter);
+  }
+  prime_iterator_destroy(&iter);
+  return n;
+}
+#endif
+
+
 int _GMP_is_aks_prime(mpz_t n)
 {
-  mpz_t sqrtn;
   mpz_t *px, *py;
   int retval;
-  UV i, limit, rlimit, r, a;
-  double log2n;
+  UV i, s, r, a;
   int _verbose = get_verbose_level();
-  /* PRIME_ITERATOR(iter); */
 
-  if (mpz_cmp_ui(n, 4) < 0) {
+  if (mpz_cmp_ui(n, 4) < 0)
     return (mpz_cmp_ui(n, 1) <= 0) ? 0 : 1;
-  }
 
-  if (mpz_perfect_power_p(n)) {
+  /* Just for performance: check small divisors: 2*3*5*7*11*13*17*19*23 */
+  if (mpz_gcd_ui(0, n, 223092870UL) != 1 && mpz_cmp_ui(n, 23) > 0)
     return 0;
-  }
 
-  mpz_init(sqrtn);
-  mpz_sqrt(sqrtn, n);
-  /* limit should be floor( log2(n) ** 2 ).  The simple GMP solution is
-   * to get ceil(log2(n)) viz mpz_sizeinbase(n,2) and square, but that
-   * overcalculates by a fair amount.  We'll calculate float log2n as:
-   *   ceil(log2(n**k)) / k  [mpz_sizeinbase(n,2) <=> ceil(log2(n))]
-   * which gives us a value that slightly overestimates log2(n).
-   */
+  if (mpz_perfect_power_p(n))
+    return 0;
+
+#if AKS_VARIANT == AKS_VARIANT_V6    /* From the V6 AKS paper */
   {
-    mpz_t t;
+    mpz_t sqrtn, t;
+    double log2n;
+    UV limit;
+    PRIME_ITERATOR(iter);
+
+    mpz_init(sqrtn);
+    mpz_sqrt(sqrtn, n);
+
+    /* limit should be floor( log2(n) ** 2 ).  The simple GMP solution is
+     * to get ceil(log2(n)) via mpz_sizeinbase(n,2) and square, but that
+     * overcalculates by a fair amount.  We'll calculate float log2n as:
+     *   ceil(log2(n**k)) / k  [mpz_sizeinbase(n,2) <=> ceil(log2(n))]
+     * which gives us a value that slightly overestimates log2(n).
+     */
     mpz_init(t);
     mpz_pow_ui(t, n, 32);
     log2n = ((double) mpz_sizeinbase(t, 2) + 0.000001) / 32.0;
     limit = (UV) floor( log2n * log2n );
     mpz_clear(t);
+
+    if (_verbose>1) gmp_printf("# AKS checking order_r(%Zd) to %lu\n", n, (unsigned long) limit);
+
+    /* Using a native r limits us to ~2000 digits in the worst case (r ~ log^5n)
+     * but would typically work for 100,000+ digits (r ~ log^3n).  This code is
+     * far too slow to matter either way.  Composite r is ok here, but it will
+     * always end up prime, so save time and just check primes. */
+    retval = 0;
+    for (r = 2; /* */; r = prime_iterator_next(&iter)) {
+      if (mpz_divisible_ui_p(n, r) ) /* r divides n.  composite. */
+        { retval = 0; break; }
+      if (mpz_cmp_ui(sqrtn, r) <= 0) /* no r <= sqrtn divides n.  prime. */
+        { retval = 1; break; }
+      if (mpz_order_ui(r, n, limit) > limit)
+        { retval = 2; break; }
+    }
+    prime_iterator_destroy(&iter);
+    mpz_clear(sqrtn);
+    if (retval != 2) return retval;
+
+    /* Bernstein 2002 suggests we could use:
+     *   s = (UV) floor( ceil(sqrt(((double)(r-1))/3.0)) * log2n );
+     * here, by Minkowski's theorem.  r-1 is really phi(r).  */
+    s = (UV) floor( sqrt(r-1) * log2n );
+  }
+#elif AKS_VARIANT == AKS_VARIANT_BORNEMANN /* Bernstein + Voloch */
+  {
+    UV slim;
+    double c2, x;
+    /* small t = few iters of big poly.  big t = many iters of small poly */
+    double const t = (mpz_sizeinbase(n, 2) <= 64) ? 32 : 40;
+    double const t1 = (1.0/((t+1)*log(t+1)-t*log(t)));
+    double const dlogn = mpz_logn(n);
+    mpz_t tmp;
+    PRIME_ITERATOR(iter);
+
+    mpz_init(tmp);
+    prime_iterator_setprime(&iter, (UV) (t1*t1 * dlogn*dlogn) );
+    r = prime_iterator_next(&iter);
+    while (!is_primitive_root(n,r))
+      r = prime_iterator_next(&iter);
+    prime_iterator_destroy(&iter);
+
+    slim = (UV) (2*t*(r-1));
+    c2 = dlogn * floor(sqrt(r));
+    { /* Binary search for first s in [1,slim] where x >= 0 */
+      UV i = 1;
+      UV j = slim;
+      while (i < j) {
+        s = i + (j-i)/2;
+        mpz_bin_uiui(tmp, r+s-1, s);
+        x = mpz_logn(tmp) / c2 - 1.0;
+        if (x < 0)  i = s+1;
+        else        j = s;
+      }
+      s = i-1;
+    }
+    s = (s+3) >> 1;
+    /* Bornemann checks factors up to (s-1)^2, we check to max(r,s) */
+    /* slim = (s-1)*(s-1); */
+    slim = (r > s) ? r : s;
+    if (_verbose > 1) printf("# aks trial to %lu\n", slim);
+    if (_GMP_trial_factor(n, 2, slim) > 1)
+      { mpz_clear(tmp); return 0; }
+    mpz_sqrt(tmp, n);
+    if (mpz_cmp_ui(tmp, slim) <= 0)
+      { mpz_clear(tmp); return 1; }
+    mpz_clear(tmp);
   }
 
-  if (_verbose>1) gmp_printf("# AKS checking order_r(%Zd) to %lu\n", n, (unsigned long) limit);
+#elif AKS_VARIANT == AKS_VARIANT_BERNEXAMPLE
+  {
+    double slim, x;
+    mpz_t t, t2;
+    PRIME_ITERATOR(iter);
+    mpz_init(t);  mpz_init(t2);
+    r = 0;
+    s = 0;
+    while (1) {
+      UV q, tmp;
+      if (mpz_cmp_ui(n, r) <= 0) break;
+      r = prime_iterator_next(&iter);
+      q = largest_factor(r-1);
+      mpz_set_ui(t, r);
+      mpz_powm_ui(t, n, (r-1)/q, t);
+      /* gmp_printf("r %lu  q %lu  t %Zd\n", r, q, t); */
+      if (mpz_cmp_ui(t, 1) <= 0) continue;
+      /* printf("trying r=%lu\n", r); */
 
-  /* Using a native r limits us to ~2000 digits in the worst case (r ~ log^5n)
-   * but would typically work for 100,000+ digits (r ~ log^3n).  This code is
-   * far too slow to matter either way. */
-
-  for (r = 2; mpz_cmp_ui(n, r) > 0; r++) {
-    if (mpz_divisible_ui_p(n, r)) {   /* r divides n.  composite. */
-      /* prime_iterator_destroy(&iter); */
-      mpz_clear(sqrtn);
+      s = 2;
+      slim = 2 * floor(sqrt(r)) * log(mpz_get_d(n));
+      while (1) {
+        mpz_bin_uiui(t, q+s-1, s);
+        x = log(mpz_get_d(t)) / slim - 1.0;
+        if (x > 0) break;
+        s++;
+        if (s > 1000000) { s=0; break; }
+      }
+      if (s != 0) break;
+    }
+    mpz_clear(t);  mpz_clear(t2);
+    prime_iterator_destroy(&iter);
+    if (_GMP_trial_factor(n, 2, s) > 1)
       return 0;
-    }
-    if (mpz_cmp_ui(sqrtn, r) < 0) {  /* no r <= sqrtn divides n.  prime. */
-      /* prime_iterator_destroy(&iter); */
-      mpz_clear(sqrtn);
-      return 1;
-    }
-    if (mpz_order_ui(r, n, limit) > limit)
-      break;
   }
-  /* prime_iterator_destroy(&iter); */
-  mpz_clear(sqrtn);
+#endif
 
-  if (mpz_cmp_ui(n, r) <= 0) {
-    return 1;
-  }
-
-  rlimit = (UV) floor( sqrt(r-1) * log2n );
-
-  if (_verbose) gmp_printf("# AKS %Zd.  r = %lu rlimit = %lu\n", n, (unsigned long) r, (unsigned long) rlimit);
+  if (_verbose) gmp_printf("# AKS %Zd.  r = %lu s = %lu\n", n, (unsigned long) r, (unsigned long) s);
 
   /* Create the three polynomials we will use */
   New(0, px, r, mpz_t);
@@ -1006,7 +1131,7 @@ int _GMP_is_aks_prime(mpz_t n)
   }
 
   retval = 1;
-  for (a = 1; a <= rlimit; a++) {
+  for (a = 1; a <= s; a++) {
     if (! test_anr(a, n, r, px, py) ) {
       retval = 0;
       break;
@@ -1879,17 +2004,64 @@ int _GMP_squfof_factor(mpz_t n, mpz_t f, UV rounds)
 }
 
 /* See if n is a perfect power */
-int _GMP_power_factor(mpz_t n, mpz_t f)
+UV power_factor(mpz_t n, mpz_t f)
 {
   if (mpz_perfect_power_p(n)) {
-    unsigned long k;
-
+    UV k;
     mpz_set_ui(f, 1);
     for (k = 2; mpz_sgn(f); k++) {
-      if (mpz_root(f, n, k))
-        return 1;
+      if (mpz_root(f, n, k)) {
+        if (mpz_perfect_power_p(f)) {  /* If root is a power, recurse */
+          mpz_t nf;
+          mpz_init_set(nf, f);
+          k *= power_factor(nf, f);
+          mpz_clear(nf);
+        }
+        return k;
+      }
     }
     /* GMP says it's a perfect power, but we couldn't find an integer root? */
   }
   return 0;
+}
+
+/* a=0, return power.  a>1, return bool if an a-th power */
+UV is_power(mpz_t n, UV a)
+{
+  if (mpz_cmp_ui(n,3) <= 0)
+    return 0;
+  else if (a == 1)
+    return 1;
+  else if (a == 2)
+    return mpz_perfect_square_p(n);
+  else {
+    UV result;
+    mpz_t t;
+    mpz_init(t);
+    result = (a == 0)  ?  power_factor(n, t)  :  (UV)mpz_root(t, n, a);
+    mpz_clear(t);
+    return result;
+  }
+}
+
+void exp_mangoldt(mpz_t res, mpz_t n)
+{
+  UV k;
+  mpz_set_ui(res, 1);
+  if (mpz_cmp_ui(n, 1) <= 0)
+    return;
+  k = mpz_scan1(n, 0);
+  if (k > 0) {
+    if (k+1 == mpz_sizeinbase(n, 2))
+      mpz_set_ui(res, 2);
+    return;
+  }
+  if (_GMP_is_prob_prime(n)) {
+    mpz_set(res, n);
+    return;
+  }
+  k = power_factor(n, res);
+  if (k > 1 && _GMP_is_prob_prime(res))
+    return;
+  mpz_set_ui(res, 1);
 }

@@ -3,29 +3,31 @@ abstract: 'Utilities related to prime numbers, using GMP'
 author:
   - 'Dana A Jacobsen <dana@acm.org>'
 build_requires:
-  ExtUtils::MakeMaker: 0
-  Test::More: 0.45
+  ExtUtils::MakeMaker: '0'
+  Test::More: '0.45'
+configure_requires:
+  ExtUtils::MakeMaker: '0'
 dynamic_config: 1
-generated_by: 'ExtUtils::MakeMaker version 6.82, CPAN::Meta::Converter version 2.132830'
+generated_by: 'ExtUtils::MakeMaker version 6.94, CPAN::Meta::Converter version 2.140640'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
-  version: 1.4
+  version: '1.4'
 name: Math-Prime-Util-GMP
 no_index:
   directory:
     - t
     - inc
 recommends:
-  Math::Prime::Util: 0.37
+  Math::Prime::Util: '0.37'
 requires:
-  Carp: 0
-  Exporter: 5.562
-  XSLoader: 0.01
-  base: 0
-  perl: 5.006002
+  Carp: '0'
+  Exporter: '5.562'
+  XSLoader: '0.01'
+  base: '0'
+  perl: '5.006002'
 resources:
   homepage: https://github.com/danaj/Math-Prime-Util-GMP
   license: http://dev.perl.org/licenses/
   repository: https://github.com/danaj/Math-Prime-Util-GMP
-version: 0.18
+version: '0.19'

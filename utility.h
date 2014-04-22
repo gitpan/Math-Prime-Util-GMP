@@ -36,7 +36,7 @@ extern void polyz_set(mpz_t* pr, long* dr, mpz_t* ps, long ds);
 extern void polyz_print(const char* header, mpz_t* pn, long dn);
 extern void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, mpz_t mod);
 extern void polyz_div(mpz_t *pq, mpz_t *pr, mpz_t *pn, mpz_t *pd,
-                      long *dq, long *dr, long dn, long dd);
+                      long *dq, long *dr, long dn, long dd, mpz_t NMOD);
 extern void polyz_pow_polymod(mpz_t* pres,  mpz_t* pn,  mpz_t* pmod,
                               long *dres,   long   dn,  long   dmod,
                               mpz_t power, mpz_t NMOD);
@@ -45,7 +45,8 @@ extern void polyz_gcd(mpz_t* pres, mpz_t* pa, mpz_t* pb, long* dres, long da, lo
 extern void polyz_root_deg1(mpz_t root, mpz_t* pn, mpz_t NMOD);
 extern void polyz_root_deg2(mpz_t root1, mpz_t root2, mpz_t* pn, mpz_t NMOD);
 
-/* Find roots of a polynomial, slightly modified. */
+/* Find roots of a polynomial mod a prime, slightly modified. */
+/* We will stop if we've found at least maxroots unique roots. */
 extern void polyz_roots_modp(mpz_t** roots, long *nroots, long maxroots,
                              mpz_t *pP, long dP, mpz_t NMOD,
                              gmp_randstate_t* p_randstate);
@@ -60,5 +61,14 @@ extern UV poly_class_poly(IV D, mpz_t**T, int* type);
 
 /* return a 0 terminated list of all D's sorted by degree */
 extern IV* poly_class_degrees(int insert_1s);
+
+/* List of class polynomial indices in order */
+extern int* poly_class_nums(void);
+/* Given a class poly index, return the degree and fill in (if not null):
+ *   D     the discriminant number
+ *   T     the polynomial coefficients
+ *   type  the poly type:  1 Hilber, 2 Weber
+ */
+extern UV poly_class_poly_num(int i, int *D, mpz_t**T, int* type);
 
 #endif

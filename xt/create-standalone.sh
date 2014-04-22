@@ -69,8 +69,8 @@ TEST2 = 4101186565771483058393796013015990306873
 TEST3 = 35393208195490503043982975376709535956301978008095654379254570182486977128836509
 TEST4 = 935006864223353238737221824562525122013245238547726726389470209512876196672409305516259055214126542251267716102384835899
 TEST5 = 25433248801892216938808041984973587415848723989586550342338936524369752729114437550630504573611493987544033285909689162724975971196674890122730486522513928304389686931651745712950504486324914805161849
-TEST6 = 2573680634634742684988059303340072157306440549467346842076284472742530915396946888883763105892789439216552015714509042025932647373424612173420639576965158111847090690769199946599158997103042503092467874619182254986407320141886540415645993112415864297822800830675077273949020832529
-TEST7 = 78486079394847604055435555576956934174608411193012702852005077898067152416827867916085811348287925039452604660288164281575615762142839436967539454211418313773408606828156870435997942877890291660063681819004150984589390618763723864929823290896508238464443567850467471302567595768468411539893589800373173121478594085973870600513940448352346668513329311
+TEST6 = 9805395078382368090505040572030888128042903590778595659611793383233089744266057832338719254777179628060930905633717264804767081354556273122188172463117096876389627469817121375789418174467686118164854924603273433083668455457307317475867158494243611475656192285904836693990000951833
+TEST7 = 14783869341310731862535181711924146413209106702463668486125206627959998111552028525869806779180480078890581625378293879184823213870417286554264959032457904699577075117266041686053691857746703656877556879868345571593862758480658145938864170620882703502631810038072518245192559323694333232320523172244347200606659255752705575709361904749964234503630803
 TEST8 = 516069211402263086362802849056712149142247708608707602810064116323740967320507238792597022510888972176570219148745538673939283056074749627707686516295450338874349093022059487090007604327705115534233283204877186839852673049019899452650976370088509524263064316558360307931746214148027462933967332118502005274436360122078931230288854613802443446620402918656243749843390157467993315073584216791188709452340255395988925217870997387615378161410168698419453325449311
 
 test: $(TARGET) vcert
@@ -81,7 +81,7 @@ cat << 'EOREADME' > standalone/README
 
 ECPP-DJ:  Elliptic Curve Primality Proof.
 
-Dana Jacobsen (dana@acm.org), 2012-2013
+Copyright 2012-2014, Dana Jacobsen (dana@acm.org).
 
 Let me know if you find this software useful, and suggestions, comments, and
 patches are welcome.
@@ -91,6 +91,10 @@ INSTALLATION:
      make
      make test           (optional)
      ./ecpp-dj -help     (shows usage)
+
+     # If you plan on doing proofs with numbers over 800 digits, consider:
+     #   wget http://probableprime.org/ecpp/cpd/huge/class_poly_data.h.gz
+     #   gunzip class_poly_data.h.gz
 
 This is a standalone version of the ECPP implemention written for the Perl
 module Math::Prime::Util::GMP in 2013.  This uses a "Factor All" strategy, and
@@ -115,12 +119,20 @@ will read both the MPU format and the PRIMO format.
 Performance is quite good for most sub-1000 digit numbers, but starts getting
 uneven over 500 digits.  Much more work is possible here.
 
-In my testing, it is much, much faster than GMP-ECPP 2.49.  It is fairly
-similar in speed under ~300 digits to Morain's old 6.4.5a ECPP, but is
-substantially faster for larger numbers.  It is faster than WraithX's APRCL
-to about 1000 digits, then starts getting slower.  Note that APRCL does not
-produce a certificate.  AKS is currently not a viable proof method, being
-millions of times slower than these methods.
+For production proving of multi-thousand digit numbers, I recommend:
+   Primo   http://www.ellipsa.eu/public/primo/primo.html
+because of its large speed advantage for 1000+ digit numbers, especially on
+multi-processor machines.
+
+Quick performance comparisons:
+ - Primo is slower under ~300 digits, *much* faster as input grows.
+ - GMP-ECPP 2.49 is very, very slow.  Nearly unusable once over 500 digits.
+ - Morain's ancient 6.4.5a ECPP is similar under 300 digits, but gets slower.
+ - David Cleaver's mpz_aprcl is a tiny bit slower under ~700 digits, but gets
+   faster for larger inputs (2-3x faster at 2000 digits).  Note that APR-CL
+   does not produce a certificate.
+ - AKS is not currently a viable method, with all known implementations being
+   millions of times slower than alternative methods (ECPP or APR-CL).
 
 Some areas to concentrate on:
 
@@ -128,7 +140,9 @@ Some areas to concentrate on:
     think it still makes a lot of sense to include a fixed set (e.g. all polys
     of degree 6 or smaller) for speed.  However the lack of polynomials is a
     big issue with titanic numbers, as we run a good chance of not finding an
-    easily splitable 'm' value and then get bogged down in factoring.
+    easily splitable 'm' value and then get bogged down in factoring.  The CM
+    package from http://cm.multiprecision.org/ would be an excellent choice,
+    with my only concern being the large dependency chain.
 
  2. The factoring.  In most cases this will stay in factoring stage 1 the
     entire time, meaning we are running my _GMP_pminus1_factor code with small
@@ -136,8 +150,8 @@ Some areas to concentrate on:
     be faster).  I have tried GMP-ECM's n-1 and it is quite a bit slower for
     this purpose (let me be clear: for large B1/B2 values, GMP-ECM rocks, but
     in this application with small B1/B2, it ran slower for me).  If you add
-    the define USE_LIBECM, then GMP-ECM's ECM is used.  This may or may not
-    be faster, and needs tuning.
+    the define USE_LIBECM, then GMP-ECM's ECM is used.  This will probably be
+    slower.
 
     Where using GMP-ECM would really help (I think) is in later factoring
     stages where we're in trouble and need to work hard to find a factor since
@@ -165,25 +179,20 @@ Some areas to concentrate on:
 
  4. ecpp_down.  There are a lot of little things here that can have big
     impacts on performance.  For instance the decisions on when to keep
-    searching polys vs. backtracking.  It may be worthwhile for largish
-    numbers (e.g. 300+ digits) to find all the 'q' values at this stage, then
-    select the one with the smallest 'q' (this is an idea from Morain, I
-    believe).  The result would be more time spent searching at a given level,
-    but we'd get a shallower tree.  This is not hard with a structure like my
-    FPS code uses, but would take some jiggering in the simple FAS loop (since
-    we'd have to be prepared for backtracking).
+    searching polys vs. backtracking.
+
+    The current code, for smallish numbers, will use a cheap factoring stage
+    zero for a while before switching to stage 1.  There is a lot of repeated
+    work here that a rewrite could avoid.
 
  5. The poly root finding takes a long time for large degree polys, and perhaps
-    we could speed it up.  There is a little speedup applied, where we exit
-    early after finding 4 roots, since we really only need 1.  If we could get
-    polyz_pow_polymod to run faster this would help here in general.  For
-    titanic numbers this becomes a big bottleneck.
+    we could speed it up.
 
 
-Note 1: AKS is also included and you can use it via the '-aks' option.
-        This runs about the same speed indicated by Brent 2010, which means
-        absurdly slow.  Let me know if you find anything faster (the
-        Berstein-Lenstra r selection would help).
+Note 1: AKS is also included and you can use it via the '-aks' option.  The
+        default implentation includes improvements from Bernstein and Voloch,
+        with a tuning heuristic from Bornemann.  It is much faster than the
+        version used by Brent (2006) for instance, but it is still very slow.
 
 Note 2: You can also force use of the BLS75 theorem 5/7 n-1 proof using the
         '-nm1' option.  This is good for up to 70-80 digits or so.  It performs

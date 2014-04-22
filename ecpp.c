@@ -2,39 +2,48 @@
  *
  * ECPP - Elliptic Curve Primality Proving
  *
- * Copyright (c) 2013 Dana Jacobsen (dana@acm.org).
+ * Copyright (c) 2013-2014 Dana Jacobsen (dana@acm.org).
  * This is free software; you can redistribute it and/or modify it under
  * the same terms as the Perl 5 programming language system itself.
  *
- * This file is part of the Math::Prime::Util Perl module.  It is not too hard
- * to build this as a standalone program (see the README file).
+ * This file is part of the Math::Prime::Util::GMP Perl module.  A script
+ * is included to build this as a standalone program (see the README file).
  *
- * This is pretty good for numbers less than 800 digits.  It is many orders
- * of magnitude faster than the contemporary GMP-ECPP.  It is far, far slower
- * than PRIMO for numbers over 300 digits (it's a bit faster below that).  It
- * is missing optimizations that were in François Morain's 10-20 year old work.
+ * This is pretty good for numbers less than 800 digits.  Over that, it needs
+ * larger discriminant sets.  Comparing to other contemporary software:
+ *
+ *   - Primo is much faster for inputs over 300 digits.  Not open source.
+ *   - mpz_aprcl 1.1 (APR-CL).  Nearly the same speed to ~600 digits, with
+ *     very little speed variation.  Faster over 800 digits.  No certificate.
+ *   - GMP-ECPP is much slower at all sizes, and nearly useless > 300 digits.
+ *   - AKS is stupendously slow, even with Bernstein and Voloch improvements.
+ *   - François Morain's 10-20 year old work describes optimizations not
+ *     present here, but his (very old!) binaries run slower than this code at
+ *     all sizes.  Not open source.
  *
  * A set of fixed discriminants are used, rather than calculating them as
  * needed.  Having a way to calculate values as needed would be a big help.
- * In the interests of space for the MPU package, I've chosen ~500 values which
+ * In the interests of space for the MPU package, I've chosen ~600 values which
  * compile into about 35k of data.  This is about 1/5 of the entire code size
- * for the MPU package.  The github repository includes a alternate set of 3182
- * discriminants that compile to 2.3MB.  This is recommended if proving 300+
- * digit numbers is a regular occurance.
+ * for the MPU package.  The github repository includes an expanded set of 5271
+ * discriminants that compile to 2MB.  This is recommended if proving 300+
+ * digit numbers is a regular occurance.  There is a set available for download
+ * with almost 15k polys, taking 15.5MB.
  *
  * This version uses the FAS "factor all strategy", meaning it first constructs
  * the entire factor chain, with backtracking if necessary, then will do the
  * elliptic curve proof as it recurses back.
  *
  * If your goal is primality proofs for very large numbers, use Primo.  It's
- * free, it is really fast, it is widely used, it can process batch results,
- * and it makes independently verifiable certificates.  This software also
- * makes certificates in a described format, works well under 800 or so digits,
- * and is open source.
+ * free, it is very fast, it is widely used, it can process batch results,
+ * and it makes independently verifiable certificates (including the verifier
+ * included in this package).  MPU's ECPP (this software) is an open source
+ * alternative with many of the same features for "small" numbers of <1000
+ * digits.  Improvements are possible since it is open source.
  *
- * There are other proof methods, such as the open source APR-CL code from
- * WraithX.  For numbers over 1000 digits, the APR-CL implementation will
- * likely be faster than this, though does not produce a certificate.
+ * Another open source alternative if one does not need certificates is the
+ * mpz_aprcl code from David Cleaver.  To about 600 digits the speeds are
+ * very similar, but past that this ECPP code starts slowing down.
  *
  * Thanks to H. Cohen, R. Crandall & C. Pomerance, and H. Riesel for their
  * text books.  Thanks to the authors of open source software who allow me
@@ -61,7 +70,6 @@
 #include "prime_iterator.h"
 #include "bls75.h"
 
-#undef USE_NM1
 #define MAX_SFACS 1000
 
 #ifdef USE_LIBECM
@@ -77,18 +85,19 @@
 static int _gcdinit = 0;
 static mpz_t _gcd_small;
 static mpz_t _gcd_large;
-static mpz_t _lcm_small;
 
-void init_ecpp_gcds(void) {
+void init_ecpp_gcds(UV nsize) {
   if (_gcdinit == 0) {
     mpz_init(_gcd_small);
     mpz_init(_gcd_large);
     _GMP_pn_primorial(_gcd_small,  3000);
-    _GMP_pn_primorial(_gcd_large, 20000);
+    /* This is never re-adjusted -- first number proved sets the size */
+    nsize *= 20;
+    if      (nsize < 20000) nsize = 20000;
+    else if (nsize > 500000) nsize = 500000;
+    _GMP_pn_primorial(_gcd_large, nsize);
     mpz_divexact(_gcd_large, _gcd_large, _gcd_small);
     mpz_divexact_ui(_gcd_small, _gcd_small, 2*3*5);
-    mpz_init(_lcm_small);
-    _GMP_lcm_of_consecutive_integers(300, _lcm_small);
     _gcdinit = 1;
   }
 }
@@ -97,11 +106,24 @@ void destroy_ecpp_gcds(void) {
   if (!_gcdinit) return;
   mpz_clear(_gcd_small);
   mpz_clear(_gcd_large);
-  mpz_clear(_lcm_small);
   _gcdinit = 0;
 }
 
-
+static int is_bpsw_prime(mpz_t n) {  /* Fermat + BPSW.  TODO: Put in main. */
+  mpz_t x, y, nm1;
+  int result = 0;
+  mpz_init_set_ui(x, 210UL);
+  mpz_init(nm1);
+  mpz_sub_ui(nm1, n, 1UL);
+  mpz_init(y);
+  mpz_powm(y, x, nm1, n);
+  if (mpz_cmp_ui(y, 1UL) == 0)
+    result = _GMP_BPSW(n);
+  mpz_clear(x);
+  mpz_clear(y);
+  mpz_clear(nm1);
+  return result;
+}
 
 static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stage, mpz_t* sfacs, int* nsfacs, int degree)
 {
@@ -113,7 +135,15 @@ static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stag
 
   if (mpz_cmp(n, fmin) <= 0) return 0;
 
-  /* Utilize GMP's fast gcd algorithms.  Trial to 224737 with two gcds. */
+#if 0
+  /* Use this to really encourage n-1 / n+1 proof types */
+  if (degree <= 0) {
+    if (stage == 1) return -1;
+    if (stage == 0) stage = 1;
+  }
+#endif
+
+  /* Utilize GMP's fast gcd algorithms.  Trial to 224737+ with two gcds. */
   mpz_tdiv_q_2exp(n, n, mpz_scan1(n, 0));
   while (mpz_divisible_ui_p(n, 3))  mpz_divexact_ui(n, n, 3);
   while (mpz_divisible_ui_p(n, 5))  mpz_divexact_ui(n, n, 5);
@@ -121,22 +151,26 @@ static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stag
   mpz_gcd(f, n, _gcd_small);
   while (mpz_cmp_ui(f, 1) > 0) {
     mpz_divexact(n, n, f);
-    mpz_gcd(f, n, _gcd_small);
+    mpz_gcd(f, f, n);
   }
   if (mpz_cmp(n, fmin) <= 0) return 0;
   mpz_gcd(f, n, _gcd_large);
   while (mpz_cmp_ui(f, 1) > 0) {
     mpz_divexact(n, n, f);
-    mpz_gcd(f, n, _gcd_large);
+    mpz_gcd(f, f, n);
   }
 
   sfaci = 0;
   success = 1;
   while (success) {
     UV nsize = mpz_sizeinbase(n, 2);
+    const int do_pm1 = 1;
+    const int do_pp1 = 1;
+    const int do_pbr = 0;
+    const int do_ecm = 0;
 
     if (mpz_cmp(n, fmin) <= 0) return 0;
-    if (_GMP_is_prob_prime(n)) { mpz_set(f, n); return (mpz_cmp(f, fmin) > 0); }
+    if (is_bpsw_prime(n)) { mpz_set(f, n); return (mpz_cmp(f, fmin) > 0); }
 
     success = 0;
     B1 = 300 + 3 * nsize;
@@ -144,11 +178,33 @@ static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stag
     if (degree <= 0) B1 += 2*nsize;         /* N-1 and N+1 are really cheap. */
     if (degree > 20 && stage <= 1) B1 -= nsize;   /* Less time on big polys. */
     if (degree > 40) B1 -= nsize/2;               /* Less time on big polys. */
-    if (stage >= 1) {
+    if (stage == 0) {
+      /* A relatively small performance hit, makes slightly smaller proofs. */
+      if (nsize < 900 && degree <= 2) B1 *= 1.8;
+      /* We need to try a bit harder for the large sizes :( */
+      if (nsize > 1400)  B1 *= 2;
+      if (nsize > 2000)  B1 *= 2;
+      if (!success)
+        success = _GMP_pminus1_factor(n, f, 100+B1/8, 100+B1);
+    } else if (stage >= 1) {
+      /* P-1 */
+      if ((!success && do_pm1))
+        success = _GMP_pminus1_factor(n, f, B1, 6*B1);
+      /* Pollard's Rho */
+      if ((!success && do_pbr && nsize < 500))
+        success = _GMP_pbrent_factor(n, f, nsize % 53, 1000-nsize);
+      /* P+1 */
+      if ((!success && do_pp1)) {
+        UV ppB = (nsize < 2000) ? B1/4 : B1/16;
+        success = _GMP_pplus1_factor(n, f, 0, ppB, ppB);
+      }
+      if ((!success && do_ecm))
+        success = _GMP_ecm_factor_projective(n, f, 400, 2000, 1);
 #ifdef USE_LIBECM
-      /* TODO: Tune stage 1 (PM1?) */
       /* TODO: LIBECM in other stages */
-      if (!success) {
+      /* Note: this will be substantially slower than our code for small sizes
+       *       and the small B1/B2 values we're using. */
+      if (!success && degree <= 2 && nsize > 600) {
         ecm_params params;
         ecm_init(params);
         params->method = ECM_ECM;
@@ -157,11 +213,8 @@ static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stag
         success = ecm_factor(f, n, B1/4, params);
         ecm_clear(params);
         if (mpz_cmp(f, n) == 0)  success = 0;
+        if (success) { printf("ECM FOUND FACTOR\n"); }
       }
-#else
-      if (!success) success = _GMP_pminus1_factor(n, f, B1, 6*B1);
-      if (!success) success = _GMP_pplus1_factor(n, f, 0, B1/8, B1/8);
-      if (!success && nsize < 500) success = _GMP_pbrent_factor(n, f, nsize, 1024-nsize);
 #endif
     }
     /* Try any factors found in previous stage 2+ calls */
@@ -174,17 +227,17 @@ static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stag
     }
     if (stage > 1 && !success) {
       if (stage == 2) {
-        if (!success) success = _GMP_pbrent_factor(n, f, nsize-1, 8192);
+        /* if (!success) success = _GMP_pbrent_factor(n, f, nsize-1, 8192); */
         if (!success) success = _GMP_pminus1_factor(n, f, 6*B1, 60*B1);
         /* p+1 with different initial point and searching farther */
         if (!success) success = _GMP_pplus1_factor(n, f, 1, B1/2, B1/2);
-        if (!success) success = _GMP_ecm_factor_projective(n, f, 250, 2500, 3);
+        if (!success) success = _GMP_ecm_factor_projective(n, f, 250, 2500, 8);
       } else if (stage == 3) {
         if (!success) success = _GMP_pbrent_factor(n, f, nsize+1, 16384);
         if (!success) success = _GMP_pminus1_factor(n, f, 60*B1, 600*B1);
         /* p+1 with a third initial point and searching farther */
         if (!success) success = _GMP_pplus1_factor(n, f, 2, 1*B1, 1*B1);
-        if (!success) success = _GMP_ecm_factor_projective(n, f, B1/4, B1*4, 4);
+        if (!success) success = _GMP_ecm_factor_projective(n, f, B1/4, B1*4, 5);
       } else if (stage == 4) {
         if (!success) success = _GMP_pminus1_factor(n, f, 300*B1, 300*20*B1);
         if (!success) success = _GMP_ecm_factor_projective(n, f, B1/2, B1*8, 4);
@@ -205,7 +258,7 @@ static int check_for_factor(mpz_t f, mpz_t inputn, mpz_t fmin, mpz_t n, int stag
         nsfacs[0]++;
       }
       /* Is the factor f what we want? */
-      if ( mpz_cmp(f, fmin) > 0 && _GMP_is_prob_prime(f) )  return 1;
+      if ( mpz_cmp(f, fmin) > 0 && is_bpsw_prime(f) )  return 1;
       /* Divide out f */
       mpz_divexact(n, n, f);
     }
@@ -275,7 +328,7 @@ static void weber_root_to_hilbert_root(mpz_t r, mpz_t N, long D)
 }
 
 
-static int find_roots(long D, mpz_t N, mpz_t** roots)
+static int find_roots(long D, int poly_index, mpz_t N, mpz_t** roots, int maxroots)
 {
   mpz_t* T;
   UV degree;
@@ -288,15 +341,14 @@ static int find_roots(long D, mpz_t N, mpz_t** roots)
     return 1;
   }
 
-  degree = poly_class_poly(D, &T, &poly_type);
+  degree = poly_class_poly_num(poly_index, NULL, &T, &poly_type);
   if (degree == 0 || (poly_type != 1 && poly_type != 2))
     return 0;
 
   dT = degree;
   polyz_mod(T, T, &dT, N);
 
-  /* Don't bother getting more than 4 roots */
-  polyz_roots_modp(roots, &nroots,  4, T, dT, N, p_randstate);
+  polyz_roots_modp(roots, &nroots, maxroots, T, dT, N, p_randstate);
   if (nroots == 0) {
     gmp_printf("N = %Zd\n", N);
     croak("Failed to find roots for D = %ld\n", D);
@@ -444,15 +496,21 @@ static void update_ab(mpz_t a, mpz_t b, long D, mpz_t g, mpz_t N)
  * It's debatable what to do with a 1 return.
  */
 static int find_curve(mpz_t a, mpz_t b, mpz_t x, mpz_t y,
-                      long D, mpz_t m, mpz_t q, mpz_t N)
+                      long D, int poly_index, mpz_t m, mpz_t q, mpz_t N, int maxroots)
 {
   long nroots, npoints, i, rooti, unity, result;
   mpz_t g, t, t2;
   mpz_t* roots = 0;
-  int verbose = get_verbose_level();
 
+  /* TODO: A better way to do this, I believe, would be to have the root
+   *       finder set up as an iterator.  That way we'd get the first root,
+   *       try to find a curve, and probably we'd be done.  Only if we tried
+   *       10+ points on that root would we get another root.  This would
+   *       probably be set up as a stack (array) of polynomials plus one
+   *       saved root (for when we solve a degree 2 poly).
+   */
   /* Step 1: Get the roots of the Hilbert class polynomial. */
-  nroots = find_roots(D, N, &roots);
+  nroots = find_roots(D, poly_index, N, &roots, maxroots);
   if (nroots == 0)
     return 1;
 
@@ -477,7 +535,7 @@ static int find_curve(mpz_t a, mpz_t b, mpz_t x, mpz_t y,
       result = ecpp_check_point(x, y, m, q, a, N, t, t2);
     }
   }
-  if (verbose && npoints > 10)
+  if (npoints > 10 && get_verbose_level() > 0)
     printf("  # point finding took %ld points\n", npoints);
 
   if (roots != 0) {
@@ -552,14 +610,15 @@ static void choose_m(mpz_t* mlist, long D, mpz_t u, mpz_t v, mpz_t N,
   }
 
 /* Recursive routine to prove via ECPP */
-static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t* sfacs, int* nsfacs, char** prooftextptr)
+static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, int* dilist, mpz_t* sfacs, int* nsfacs, char** prooftextptr)
 {
   mpz_t a, b, u, v, m, q, minfactor, sqrtn, mD, t, t2;
   mpz_t mlist[6];
+  mpz_t qlist[6];
   UV nm1a;
   IV np1lp, np1lq;
   struct ec_affine_point P;
-  int k, dnum, nidigits, facresult, curveresult, downresult, stage, D;
+  int k, dindex, pindex, nidigits, facresult, curveresult, downresult, stage, D;
   int verbose = get_verbose_level();
 
   nidigits = mpz_sizeinbase(Ni, 10);
@@ -584,8 +643,10 @@ static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t
   mpz_init(mD); mpz_init(minfactor);  mpz_init(sqrtn);
   mpz_init(t);  mpz_init(t2);
   mpz_init(P.x);mpz_init(P.y);
-  for (k = 0; k < 6; k++)
+  for (k = 0; k < 6; k++) {
     mpz_init(mlist[k]);
+    mpz_init(qlist[k]);
+  }
 
   /* Any factors q found must be strictly > minfactor.
    * See Atkin and Morain, 1992, section 6.4 */
@@ -594,77 +655,73 @@ static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t
   mpz_mul(minfactor, minfactor, minfactor);
   mpz_sqrt(sqrtn, Ni);
 
-  for (stage = (i == 0) ? facstage : 1; stage <= facstage; stage++) {
+  stage = 0;
+  if (nidigits > 700) stage = 1;  /* Too rare to find them */
+  if (i == 0 && facstage > 1)  stage = facstage;
+  for ( ; stage <= facstage; stage++) {
     int next_stage = (stage > 1) ? stage : 1;
-    for (dnum = 0; dlist[dnum] != 0; dnum++) {
+    for (dindex = -1; dindex < 0 || dilist[dindex] != 0; dindex++) {
       int poly_type;  /* just for debugging/verbose */
       int poly_degree;
-      D = -dlist[dnum];
-      if (D > 1) continue;  /* Marked for skip */
+      int allq = (nidigits < 400);  /* Do all q values together, or not */
 
-      if (D == 1) {   /* n-1 test */
-        mpz_sub_ui(m, Ni, 1);          /* m = N-1 */
+      if (dindex == -1) {   /* n-1 and n+1 tests */
+        int nm1_success = 0;
+        int np1_success = 0;
+        const char* ptype = "";
+        mpz_sub_ui(m, Ni, 1);
         mpz_sub_ui(t2, sqrtn, 1);
         mpz_tdiv_q_2exp(t2, t2, 1);    /* t2 = minfactor */
-
-        facresult = check_for_factor(q, m, t2, t, stage, sfacs, nsfacs, 0);
-        if (facresult <= 0)
-          continue;
-        if (verbose)
-          { printf(" n-1\n"); fflush(stdout); }
-        downresult = ecpp_down(i+1, q, next_stage, pmaxH, dlist, sfacs, nsfacs, prooftextptr);
-        if (downresult == 0) goto end_down;   /* composite */
-        if (downresult == 1) {   /* nothing found at this stage */
-          VERBOSE_PRINT_N(i, nidigits, *pmaxH, facstage);
-          continue;
-        }
-        if (verbose)
-          { printf("%*sN[%d] (%d dig) n-1", i, "", i, nidigits); fflush(stdout); }
-        curveresult = _GMP_primality_bls_3(Ni, q, &nm1a);
-        if (verbose) { printf("  %d\n", curveresult); fflush(stdout); }
-        if ( ! curveresult ) {
-          /* This ought not happen */
-          if (verbose) gmp_printf("\n  Could not prove n-1 with N = %Zd\n", Ni);
-          downresult = 1;
-          continue;
-        }
-        goto end_down;
-      }
-      if (D == -1) {  /* n+1 test */
-        mpz_add_ui(m, Ni, 1);          /* m = N+1 */
+        nm1_success = check_for_factor(u, m, t2, t, stage, sfacs, nsfacs, 0);
+        mpz_add_ui(m, Ni, 1);
         mpz_add_ui(t2, sqrtn, 1);
         mpz_tdiv_q_2exp(t2, t2, 1);    /* t2 = minfactor */
-
-        facresult = check_for_factor(q, m, t2, t, stage, sfacs, nsfacs, 0);
-        if (facresult <= 0)
-          continue;
-        if (verbose)
-          { printf(" n+1\n"); fflush(stdout); }
-        downresult = ecpp_down(i+1, q, next_stage, pmaxH, dlist, sfacs, nsfacs, prooftextptr);
+        np1_success = check_for_factor(v, m, t2, t, stage, sfacs, nsfacs, 0);
+        /* If both successful, pick smallest */
+        if (nm1_success > 0 && np1_success > 0) {
+          if (mpz_cmp(u, v) <= 0) np1_success = 0;
+          else                    nm1_success = 0;
+        }
+        if      (nm1_success > 0) {  ptype = "n-1";  mpz_set(q, u);  D =  1; }
+        else if (np1_success > 0) {  ptype = "n+1";  mpz_set(q, v);  D = -1; }
+        else                      continue;
+        if (verbose) { printf(" %s\n", ptype); fflush(stdout); }
+        downresult = ecpp_down(i+1, q, next_stage, pmaxH, dilist, sfacs, nsfacs, prooftextptr);
         if (downresult == 0) goto end_down;   /* composite */
         if (downresult == 1) {   /* nothing found at this stage */
           VERBOSE_PRINT_N(i, nidigits, *pmaxH, facstage);
           continue;
         }
         if (verbose)
-          { printf("%*sN[%d] (%d dig) n+1", i, "", i, nidigits); fflush(stdout); }
-        curveresult = _GMP_primality_bls_15(Ni, q, &np1lp, &np1lq);
+          { printf("%*sN[%d] (%d dig) %s", i, "", i, nidigits, ptype); fflush(stdout); }
+        curveresult = (nm1_success > 0)
+                    ? _GMP_primality_bls_3(Ni, q, &nm1a)
+                    : _GMP_primality_bls_15(Ni, q, &np1lp, &np1lq);
         if (verbose) { printf("  %d\n", curveresult); fflush(stdout); }
-        if ( ! curveresult ) {
-          /* This ought not happen */
-          if (verbose) gmp_printf("\n  Could not prove n+1 with N = %Zd\n", Ni);
+        if ( ! curveresult ) { /* This ought not happen */
+          if (verbose)
+            gmp_printf("\n  Could not prove %s with N = %Zd\n", ptype, Ni);
           downresult = 1;
           continue;
         }
         goto end_down;
       }
+
+      pindex = dilist[dindex];
+      if (pindex < 0) continue;  /* We marked this for skip */
+      /* Get the values for D, degree, and poly type */
+      poly_degree = poly_class_poly_num(pindex, &D, NULL, &poly_type);
+      if (poly_degree == 0)
+        croak("Unknown value in dilist[%d]: %d\n", dindex, pindex);
 
       if ( (-D % 4) != 3 && (-D % 16) != 4 && (-D % 16) != 8 )
         croak("Invalid discriminant '%d' in list\n", D);
       /* D must also be squarefree in odd divisors, but assume it. */
       /* Make sure we can get a class polynomial for this D. */
-      poly_degree = poly_class_poly(D, NULL, &poly_type);
-      if (poly_degree == 0)  continue;
+      if (poly_degree > 16 && stage == 0) {
+        if (verbose) printf(" [1]");
+        break;
+      }
       /* Make the continue-search vs. backtrack decision */
       if (*pmaxH > 0 && poly_degree > *pmaxH)  break;
       mpz_set_si(mD, D);
@@ -677,15 +734,49 @@ static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t
       if (verbose > 1)
         { printf(" %d", D); fflush(stdout); }
 
+      /* We're going to factor all the values for this discriminant then pick
+       * the smallest.  This adds a little time, but it means we go down
+       * faster.  This makes smaller proofs, and might even save time. */
+
       choose_m(mlist, D, u, v, Ni, t, t2);
+      if (allq) {
+        int i, j;
+        /* We have 0 to 6 m values.  Try to factor them, put in qlist. */
+        for (k = 0; k < 6; k++) {
+          mpz_set_ui(qlist[k], 0);
+          if (mpz_sgn(mlist[k])) {
+            facresult = check_for_factor(qlist[k], mlist[k], minfactor, t, stage, sfacs, nsfacs, poly_degree);
+            /* -1 = couldn't find, 0 = no big factors, 1 = found */
+            if (facresult <= 0)
+              mpz_set_ui(qlist[k], 0);
+          }
+        }
+        /* Sort any q values by size, so we work on the smallest first */
+        for (i = 0; i < 5; i++)
+          if (mpz_sgn(qlist[i]))
+            for (j = i+1; j < 6; j++)
+              if (mpz_sgn(qlist[j]) && mpz_cmp(qlist[i],qlist[j]) > 0) {
+                mpz_swap( qlist[i], qlist[j] );
+                mpz_swap( mlist[i], mlist[j] );
+              }
+      }
+      /* Try to make a proof with the first (smallest) q value.
+       * Repeat for others if we have to. */
       for (k = 0; k < 6; k++) {
         int maxH = *pmaxH;
-        int minH = (nidigits <= 240) ? 6 : (nidigits+39)/40;
-        facresult = check_for_factor(q, mlist[k], minfactor, t, stage, sfacs, nsfacs, poly_degree);
-        /* -1 = couldn't find, 0 = no big factors, 1 = found */
-        if (facresult <= 0)
-          continue;
-        mpz_set(m, mlist[k]);
+        int minH = (nidigits <= 240) ? 7 : (nidigits+34)/35;
+
+        if (allq) {
+          if (mpz_sgn(qlist[k]) == 0) continue;
+          mpz_set(m, mlist[k]);
+          mpz_set(q, qlist[k]);
+        } else {
+          if (mpz_sgn(mlist[k]) == 0) continue;
+          mpz_set(m, mlist[k]);
+          facresult = check_for_factor(q, m, minfactor, t, stage, sfacs, nsfacs, poly_degree);
+          if (facresult <= 0) continue;
+        }
+
         if (verbose)
           { printf(" %d (%s %d)\n", D, (poly_type == 1) ? "Hilbert" : "Weber", poly_degree); fflush(stdout); }
         if (maxH == 0) {
@@ -696,7 +787,7 @@ static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t
           maxH--;
         }
         /* Great, now go down. */
-        downresult = ecpp_down(i+1, q, next_stage, &maxH, dlist, sfacs, nsfacs, prooftextptr);
+        downresult = ecpp_down(i+1, q, next_stage, &maxH, dilist, sfacs, nsfacs, prooftextptr);
         /* Nothing found, look at more polys in the future */
         if (downresult == 1 && *pmaxH > 0)  *pmaxH = maxH;
 
@@ -710,12 +801,18 @@ static int ecpp_down(int i, mpz_t Ni, int facstage, int *pmaxH, IV* dlist, mpz_t
         if (verbose)
           { printf("%*sN[%d] (%d dig) %d (%s %d)", i, "", i, nidigits, D, (poly_type == 1) ? "Hilbert" : "Weber", poly_degree); fflush(stdout); }
 
-        curveresult = find_curve(a, b, P.x, P.y, D, m, q, Ni);
+        /* Try with only one or two roots, then 8 if that didn't work. */
+        /* TODO: This should be done using a root iterator in find_curve() */
+        curveresult = find_curve(a, b, P.x, P.y, D, pindex, m, q, Ni, 1);
+        if (curveresult == 1) {
+          if (verbose) { printf(" [redo roots]"); fflush(stdout); }
+          curveresult = find_curve(a, b, P.x, P.y, D, pindex, m, q, Ni, 8);
+        }
         if (verbose) { printf("  %d\n", curveresult); fflush(stdout); }
         if (curveresult == 1) {
-          /* Oh no!  We can't find a point on the curve.  Something is right
-           * messed up, and we've wasted a lot of time.  Sigh. */
-          dlist[dnum] = -2; /* skip this D value from now on */
+          /* Something is wrong.  Very likely the class poly coefficients are
+             incorrect.  We've wasted lots of time, and need to try again. */
+          dilist[dindex] = -2; /* skip this D value from now on */
           if (verbose) gmp_printf("\n  Invalidated D = %d with N = %Zd\n", D, Ni);
           downresult = 1;
           continue;
@@ -798,8 +895,10 @@ end_down:
   mpz_clear(mD); mpz_clear(minfactor);  mpz_clear(sqrtn);
   mpz_clear(t);  mpz_clear(t2);
   mpz_clear(P.x);mpz_clear(P.y);
-  for (k = 0; k < 6; k++)
+  for (k = 0; k < 6; k++) {
     mpz_clear(mlist[k]);
+    mpz_clear(qlist[k]);
+  }
 
   return downresult;
 }
@@ -807,32 +906,35 @@ end_down:
 /* returns 2 if N is proven prime, 1 if probably prime, 0 if composite */
 int _GMP_ecpp(mpz_t N, char** prooftextptr)
 {
-  IV* dlist;
+  int* dilist;
   mpz_t* sfacs;
   int i, fstage, result, nsfacs;
-  int verbose = get_verbose_level();
+  UV nsize = mpz_sizeinbase(N,2);
 
   /* We must check gcd(N,6), let's check 2*3*5*7*11*13*17*19*23. */
-  if (mpz_gcd_ui(NULL, N, 223092870UL) != 1)
-    return _GMP_is_prob_prime(N);
+  if (nsize <= 64 || mpz_gcd_ui(NULL, N, 223092870UL) != 1) {
+    result = _GMP_is_prob_prime(N);
+    if (result != 1) return result;
+  }
 
-  init_ecpp_gcds();
+  init_ecpp_gcds( nsize );
 
   if (prooftextptr)
     *prooftextptr = 0;
 
   New(0, sfacs, MAX_SFACS, mpz_t);
-  dlist = poly_class_degrees(1);
+  dilist = poly_class_nums();
   nsfacs = 0;
   result = 1;
   for (fstage = 1; fstage < 20; fstage++) {
     int maxH = 0;
-    if (verbose && fstage == 3) gmp_printf("Working hard on: %Zd\n", N);
-    result = ecpp_down(0, N, fstage, &maxH, dlist, sfacs, &nsfacs, prooftextptr);
+    if (fstage == 3 && get_verbose_level())
+      gmp_printf("Working hard on: %Zd\n", N);
+    result = ecpp_down(0, N, fstage, &maxH, dilist, sfacs, &nsfacs, prooftextptr);
     if (result != 1)
       break;
   }
-  Safefree(dlist);
+  Safefree(dilist);
   for (i = 0; i < nsfacs; i++)
     mpz_clear(sfacs[i]);
   Safefree(sfacs);

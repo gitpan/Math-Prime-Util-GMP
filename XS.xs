@@ -126,8 +126,8 @@ int miller_rabin_random(IN char* strn, IN UV nbases, IN char* seedstr = 0)
       UV digsum = 0; \
       int i, slen = strlen(strn); \
       /* Multiples of 2 and 5 return 0 */ \
-      switch (strn[slen]) { \
-        case '0': case '2': case '4': case '5': case '6': case '8': \
+      switch (strn[slen-1]-'0') { \
+        case 0: case 2: case 4: case 5: case 6: case 8: \
            XSRETURN_IV(0); break; \
       } \
       /* Multiples of 3 return 0 */ \
@@ -247,6 +247,19 @@ _validate_ecpp_curve(IN char* stra, IN char* strb, IN char* strn, IN char* strpx
   OUTPUT:
     RETVAL
 
+UV
+is_power(IN char* strn, IN UV a = 0)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    validate_string_number("is_power (n)", strn);
+    mpz_init_set_str(n, strn, 10);
+    RETVAL = is_power(n, a);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
+
 #define XPUSH_MPZ(n) \
   { \
     /* Push as a scalar if <= min(ULONG_MAX,UV_MAX), string otherwise */ \
@@ -310,6 +323,7 @@ primorial(IN char* strn)
   ALIAS:
     pn_primorial = 1
     consecutive_integer_lcm = 2
+    exp_mangoldt = 3
   PREINIT:
     mpz_t res, n;
     UV un;
@@ -320,8 +334,9 @@ primorial(IN char* strn)
     switch (ix) {
       case 0:  _GMP_primorial(res, n);  break;
       case 1:  _GMP_pn_primorial(res, un);  break;
-      case 2:
-      default: _GMP_lcm_of_consecutive_integers(un, res);
+      case 2: _GMP_lcm_of_consecutive_integers(un, res);  break;
+      case 3:
+      default: exp_mangoldt(res, n);
     }
     XPUSH_MPZ(res);
     mpz_clear(n);
@@ -357,7 +372,6 @@ int
 kronecker(IN char* stra, IN char* strb)
   PREINIT:
     mpz_t a, b;
-    int res;
   CODE:
     validate_string_number("kronecker", (stra[0]=='-') ? stra+1 : stra);
     validate_string_number("kronecker", (strb[0]=='-') ? strb+1 : strb);
@@ -675,7 +689,7 @@ _GMP_factor(IN char* strn)
           }
 
           /* Make sure it isn't a perfect power */
-          if (!success)  success = _GMP_power_factor(n, f);
+          if (!success)  success = (int)power_factor(n, f);
           if (success&&o) {gmp_printf("perfect power found factor %Zd\n", f);o=0;}
 
           if (!success)  success = _GMP_pminus1_factor(n, f, 10000, 200000);

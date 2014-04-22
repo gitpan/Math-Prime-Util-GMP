@@ -502,14 +502,13 @@ void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, m
   UV i, bits, r;
   mpz_t p, p2, t;
 
-  mpz_init(p); mpz_init(p2); mpz_init(t);
+  mpz_init(p); mpz_init(t);
   *dr = dx+dy;
   r = *dr+1;
   mpz_mul(t, mod, mod);
   mpz_mul_ui(t, t, r);
   bits = mpz_sizeinbase(t, 2);
   mpz_set_ui(p, 0);
-  mpz_set_ui(p2, 0);
 
   /* Create big integers p and p2 from px and py, with padding */
   {
@@ -518,15 +517,17 @@ void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, m
       mpz_add(p, p, px[dx-i]);
     }
   }
-  if (px != py) {
+  if (px == py) {
+    mpz_pow_ui(p, p, 2);
+  } else {
+    mpz_init_set_ui(p2, 0);
     for (i = 0; i <= (UV)dy; i++) {
       mpz_mul_2exp(p2, p2, bits);
       mpz_add(p2, p2, py[dy-i]);
     }
+    mpz_mul(p, p, p2);
+    mpz_clear(p2);
   }
-
-  /* Multiply! */
-  mpz_mul( p ,p, (px == py) ? p : p2 );
 
   /* Pull out parts of result p to pr */
   for (i = 0; i < r; i++) {
@@ -535,7 +536,7 @@ void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, m
     mpz_mod(pr[i], t, mod);
   }
 
-  mpz_clear(p); mpz_clear(p2); mpz_clear(t);
+  mpz_clear(p); mpz_clear(t);
 }
 #endif
 #if 0
@@ -589,11 +590,10 @@ void polyz_mulmod(mpz_t* pr, mpz_t* px, mpz_t *py, long *dr, long dx, long dy, m
 }
 #endif
 
-/* Polynomial division.  We could do this modulo N, but most users only want
- * the quotient or remainder (not both), so let them do it themselves.
+/* Polynomial division modulo N.
  * This is Cohen algorithm 3.1.2 "pseudo-division". */
 void polyz_div(mpz_t *pq, mpz_t *pr, mpz_t *pn, mpz_t *pd,
-               long *dq, long *dr, long dn, long dd)
+               long *dq, long *dr, long dn, long dd, mpz_t NMOD)
 {
   long i, j;
   mpz_t t;
@@ -611,7 +611,7 @@ void polyz_div(mpz_t *pq, mpz_t *pr, mpz_t *pn, mpz_t *pd,
   /* R = N */
   *dr = dn;
   for (i = 0; i <= dn; i++)
-    mpz_set(pr[i], pn[i]);
+    mpz_set(pr[i], pn[i]);  /* pn should already be mod */
 
   if (*dr < dd)
     return;
@@ -628,24 +628,28 @@ void polyz_div(mpz_t *pq, mpz_t *pr, mpz_t *pn, mpz_t *pd,
     for (i = *dq; i >= 0; i--) {
       long di = dd + i;
       mpz_set(pq[i], pr[di]);
-      for (j = di-1; j >= i; j--)
+      for (j = di-1; j >= i; j--) {
         mpz_submul(pr[j], pr[di], pd[j-i]);
+        mpz_mod(pr[j], pr[j], NMOD);
+      }
     }
   } else {
     mpz_init(t);
     for (i = *dq; i >= 0; i--) {
       long di = dd + i;
-      mpz_pow_ui(t, pd[dd], i);
-      mpz_mul(pq[i], pr[di], t);
+      mpz_powm_ui(t, pd[dd], i, NMOD);
+      mpz_mul(t, t, pr[di]);
+      mpz_mod(pq[i], t, NMOD);
       for (j = di-1; j >= 0; j--) {
         mpz_mul(pr[j], pr[j], pd[dd]);   /* j != di so this is safe */
         if (j >= i)
           mpz_submul(pr[j], pr[di], pd[j-i]);
+        mpz_mod(pr[j], pr[j], NMOD);
       }
     }
     mpz_clear(t);
   }
-  /* Reduce R and Q.  Dubiously useful before modulo. */
+  /* Reduce R and Q. */
   while (*dr > 0 && mpz_sgn(pr[*dr]) == 0)  dr[0]--;
   while (*dq > 0 && mpz_sgn(pq[*dq]) == 0)  dq[0]--;
 }
@@ -682,14 +686,12 @@ void polyz_pow_polymod(mpz_t* pres,  mpz_t* pn,  mpz_t* pmod,
   while (mpz_cmp_ui(mpow, 0) > 0) {
     if (mpz_odd_p(mpow)) {
       polyz_mulmod(pProd, pres, pX, &dProd, *dres, dX, NMOD);
-      polyz_div(pQ, pres,  pProd, pmod,  &dQ, dres, dProd, dmod);
-      polyz_mod(pres, pres, dres, NMOD);
+      polyz_div(pQ, pres,  pProd, pmod,  &dQ, dres, dProd, dmod, NMOD);
     }
     mpz_tdiv_q_2exp(mpow, mpow, 1);
     if (mpz_cmp_ui(mpow, 0) > 0) {
       polyz_mulmod(pProd, pX, pX, &dProd, dX, dX, NMOD);
-      polyz_div(pQ, pX,  pProd, pmod,  &dQ, &dX, dProd, dmod);
-      polyz_mod(pX, pX, &dX, NMOD);
+      polyz_div(pQ, pX,  pProd, pmod,  &dQ, &dX, dProd, dmod, NMOD);
     }
   }
   mpz_clear(mpow);
@@ -720,6 +722,7 @@ void polyz_gcd(mpz_t* pres, mpz_t* pa, mpz_t* pb, long* dres, long da, long db, 
     mtmp = pa; pa = pb; pb = mtmp;
     ltmp = da; da = db; db = ltmp;
   }
+  /* TODO: Should set c=pa[da], then after Euclid loop, res = c^-1 * res */
 
   /* Allocate temporary polys */
   maxd = da;
@@ -745,7 +748,7 @@ void polyz_gcd(mpz_t* pres, mpz_t* pa, mpz_t* pb, long* dres, long da, long db, 
   while (dr1 > 0 && mpz_sgn(pr1[dr1]) == 0)   dr1--;
 
   while (dr1 > 0 || mpz_sgn(pr1[dr1]) != 0) {
-    polyz_div(pq, pr,  pres, pr1,  &dq, &dr,  *dres, dr1);
+    polyz_div(pq, pr,  pres, pr1,  &dq, &dr,  *dres, dr1, MODN);
     if (dr < 0 || dq < 0 || dr > maxd || dq > maxd)
       croak("division error: dq %ld dr %ld maxd %ld\n", dq, dr, maxd);
     /* pr0 = pr1.  pr1 = pr */
@@ -754,9 +757,7 @@ void polyz_gcd(mpz_t* pres, mpz_t* pa, mpz_t* pb, long* dres, long da, long db, 
       mpz_set(pres[i], pr1[i]);  /* pr1 is mod MODN already */
     dr1 = dr;
     for (i = 0; i <= dr; i++)
-      mpz_mod(pr1[i], pr[i], MODN);
-    /* Reduce pr1 after the mod */
-    while (dr1 > 0 && mpz_sgn(pr1[dr1]) == 0)   dr1--;
+      mpz_set(pr1[i], pr[i]);
   }
   /* return pr0 */
   while (*dres > 0 && mpz_sgn(pres[*dres]) == 0)   dres[0]--;
@@ -823,7 +824,7 @@ static void polyz_roots(mpz_t* roots, long *nroots,
   if (dg <= 2) {
     if (dg == 1) polyz_root_deg1( pxa[0], pg, NMOD );
     else         polyz_root_deg2( pxa[0], pxa[1], pg, NMOD );
-    for (dt = 0; dt < dg && *nroots < maxroots; dt++) {
+    for (dt = 0; dt < dg; dt++) {
       mpz_set(t, pxa[dt]);
       dup = 0; /* don't add duplicate roots */
       for (i = 0; i < *nroots; i++)
@@ -839,12 +840,12 @@ static void polyz_roots(mpz_t* roots, long *nroots,
 
   /* If not a monic polynomial, divide by leading coefficient */
   if (mpz_cmp_ui(pg[dg], 1) != 0) {
-    for (i = 0; i <= dg; i++) {
-      if (!mpz_divmod(pg[i], pg[i], pg[dg], NMOD, t)) {
-        mpz_clear(t);
-        return;
-      }
+    if (!mpz_invert(t, pg[dg], NMOD)) {
+      mpz_clear(t);
+      return;
     }
+    for (i = 0; i <= dg; i++)
+      mpz_mulmod(pg[i], pg[i], t, NMOD, pg[i]);
   }
 
   /* Try hard to find a single root, work less after we got one or two.
@@ -868,10 +869,14 @@ static void polyz_roots(mpz_t* roots, long *nroots,
 
   mpz_sub_ui(t, NMOD, 1);
   mpz_tdiv_q_2exp(power, t, 1);
+  /* We'll pick random "a" values from 1 to 1000M */
+  mpz_set_ui(t, 1000000000UL);
+  if (mpz_cmp(t, NMOD) > 0) mpz_set(t, NMOD);
 
   while (ntries++ < maxtries) {
-    /* pxa = X+a for a random a */
-    mpz_urandomm(pxa[0], *p_randstate, NMOD);
+    /* pxa = X+a for randomly selected a */
+    if (ntries <= 2)  mpz_set_ui(pxa[0], ntries);  /* Simple small values */
+    else              mpz_urandomm(pxa[0], *p_randstate, t);
 
     /* Raise pxa to (NMOD-1)/2, all modulo NMOD and g(x) */
     polyz_pow_polymod(pt, pxa, pg, &dt, dxa, dg, power, NMOD);
@@ -890,13 +895,11 @@ static void polyz_roots(mpz_t* roots, long *nroots,
       polyz_roots(roots, nroots, maxroots, ph, dh, NMOD, p_randstate);
       if (*nroots < maxroots) {
         /* q = g/h, and recurse */
-        polyz_div(pq, pt,  pg, ph,  &dq, &dt, dg, dh);
-        polyz_mod(pq, pq, &dq, NMOD);
+        polyz_div(pq, pt,  pg, ph,  &dq, &dt, dg, dh, NMOD);
         polyz_roots(roots, nroots, maxroots, pq, dq, NMOD, p_randstate);
       }
     } else {
-      polyz_div(pq, pt,  pg, ph,  &dq, &dt, dg, dh);
-      polyz_mod(pq, pq, &dq, NMOD);
+      polyz_div(pq, pt,  pg, ph,  &dq, &dt, dg, dh, NMOD);
       polyz_roots(roots, nroots, maxroots, pq, dq, NMOD, p_randstate);
       if (*nroots < maxroots) {
         polyz_roots(roots, nroots, maxroots, ph, dh, NMOD, p_randstate);
@@ -932,9 +935,9 @@ void polyz_roots_modp(mpz_t** roots, long *nroots, long maxroots,
   if (dP == 0)
     return;
 
-  /* Allocate space for the maximum number of roots */
-  New(0, *roots, dP, mpz_t);
-  for (i = 0; i < dP; i++)
+  /* Allocate space for the maximum number of roots (plus 1 for safety) */
+  New(0, *roots, dP+1, mpz_t);
+  for (i = 0; i <= dP; i++)
     mpz_init((*roots)[i]);
 
   if (maxroots > dP || maxroots == 0)
@@ -946,7 +949,7 @@ void polyz_roots_modp(mpz_t** roots, long *nroots, long maxroots,
     *nroots = 1;
     return;
   }
-  if (dP == 2 && maxroots >= 2) {
+  if (dP == 2) {
     polyz_root_deg2( (*roots)[0], (*roots)[1], pP, NMOD );
     *nroots = 2;
     return;
@@ -957,79 +960,24 @@ void polyz_roots_modp(mpz_t** roots, long *nroots, long maxroots,
   /* if (*nroots == 0) croak("failed to find roots\n"); */
 
   /* Clear out space for roots we didn't find */
-  for (i = *nroots; i < dP; i++)
+  for (i = *nroots; i <= dP; i++)
     mpz_clear((*roots)[i]);
 }
 
 
 #include "class_poly_data.h"
 
-UV poly_class_poly(IV D, mpz_t**T, int* type)
+int* poly_class_nums(void)
 {
-  UV i, j;
-  UV UD = -D;
-  { /* Binary search for the poly with this D */
-    UV lo = 0;
-    UV hi = NUM_CLASS_POLYS;
-    while (lo < hi) {
-      UV mid = (lo+hi)/2;
-      if (_class_poly_data[mid].D <= UD) { lo = mid+1; }
-      else                               { hi = mid;   }
-    }
-    i = lo-1;
-  }
-  if (_class_poly_data[i].D != UD) { /* Not found */
-    if (T != 0)  *T = 0;
-    return 0;
-  }
-  {                                  /* Found */
-    mpz_t t;
-    UV degree = _class_poly_data[i].degree;
-    int ctype = _class_poly_data[i].type;
-    const char* s = _class_poly_data[i].coefs;
-    if (type != 0) *type = ctype;
-    if (T == 0) return degree;
-    New(0, *T, degree+1, mpz_t);
-    mpz_init(t);
-    for (j = 0; j < degree; j++) {
-      unsigned char signcount = (*s++) & 0xFF;
-      unsigned char sign = signcount >> 7;
-      unsigned char count = signcount & 0x7F;
-      if (count == 127) {
-        do {
-          signcount = (*s++) & 0xFF;
-          count += signcount;
-        } while (signcount == 127);
-      }
-      mpz_set_ui(t, 0);
-      while (count-- > 0) {
-        mpz_mul_2exp(t, t, 8);
-        mpz_add_ui(t, t, (unsigned long) (*s++) & 0xFF);
-      }
-      /* Cube the last coefficient of Hilbert polys */
-      if (j == 0 && ctype == 1) mpz_pow_ui(t, t, 3);
-      if (sign) mpz_neg(t, t);
-      mpz_init_set( (*T)[j], t );
-    }
-    mpz_clear(t);
-    mpz_init_set_ui( (*T)[degree], 1 );
-    return degree;
-  }
-}
-
-IV* poly_class_degrees(int insert_1s)
-{
-  IV* dlist;
+  int* dlist;
   UV i;
   int degree_offset[256] = {0};
-  int poffset = insert_1s ? 2 : 0;
 
   for (i = 1; i < NUM_CLASS_POLYS; i++)
     if (_class_poly_data[i].D < _class_poly_data[i-1].D)
       croak("Problem with data file, out of order at D=%d\n", (int)_class_poly_data[i].D);
 
-  New(0, dlist, poffset + NUM_CLASS_POLYS + 1, IV);
-  dlist += poffset;
+  Newz(0, dlist, NUM_CLASS_POLYS + 1, int);
   /* init degree_offset to total number of this degree */
   for (i = 0; i < NUM_CLASS_POLYS; i++)
     degree_offset[_class_poly_data[i].degree]++;
@@ -1039,15 +987,58 @@ IV* poly_class_degrees(int insert_1s)
   /* Fill in dlist, sorted */
   for (i = 0; i < NUM_CLASS_POLYS; i++) {
     int position = degree_offset[_class_poly_data[i].degree-1]++;
-    dlist[position] = _class_poly_data[i].D;
+    dlist[position] = i+1;
   }
   /* Null terminate */
   dlist[NUM_CLASS_POLYS] = 0;
-  dlist -= poffset;
-  /* Add -1 and +1 if asked */
-  if (insert_1s) {
-    dlist[0] = -1;
-    dlist[1] =  1;
-  }
   return dlist;
+}
+
+UV poly_class_poly_num(int i, int *D, mpz_t**T, int* type)
+{
+  UV degree, j;
+  int ctype;
+  mpz_t t;
+  const char* s;
+
+  if (i < 1 || i > (int)NUM_CLASS_POLYS) { /* Invalid number */
+     if (D != 0) *D = 0;
+     if (T != 0) *T = 0;
+     return 0;
+  }
+  i--; /* i now is the index into our table */
+
+  degree = _class_poly_data[i].degree;
+  ctype  = _class_poly_data[i].type;
+  s = _class_poly_data[i].coefs;
+
+  if (D != 0)  *D = -_class_poly_data[i].D;
+  if (type != 0)  *type = ctype;
+  if (T == 0) return degree;
+
+  New(0, *T, degree+1, mpz_t);
+  mpz_init(t);
+  for (j = 0; j < degree; j++) {
+    unsigned char signcount = (*s++) & 0xFF;
+    unsigned char sign = signcount >> 7;
+    unsigned long count = signcount & 0x7F;
+    if (count == 127) {
+      do {
+        signcount = (*s++) & 0xFF;
+        count += signcount;
+      } while (signcount == 127);
+    }
+    mpz_set_ui(t, 0);
+    while (count-- > 0) {
+      mpz_mul_2exp(t, t, 8);
+      mpz_add_ui(t, t, (unsigned long) (*s++) & 0xFF);
+    }
+    /* Cube the last coefficient of Hilbert polys */
+    if (j == 0 && ctype == 1) mpz_pow_ui(t, t, 3);
+    if (sign) mpz_neg(t, t);
+    mpz_init_set( (*T)[j], t );
+  }
+  mpz_clear(t);
+  mpz_init_set_ui( (*T)[degree], 1 );
+  return degree;
 }
