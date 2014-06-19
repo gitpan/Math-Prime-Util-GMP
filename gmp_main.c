@@ -21,11 +21,14 @@
 
 static mpz_t _bgcd;
 static mpz_t _bgcd2;
+static mpz_t _bgcd3;
 #define BGCD_PRIMES       168
 #define BGCD_LASTPRIME    997
 #define BGCD_NEXTPRIME   1009
-#define BGCD2_PRIMES     2262
-#define BGCD2_NEXTPRIME 20011
+#define BGCD2_PRIMES     1229
+#define BGCD2_NEXTPRIME 10007
+#define BGCD3_PRIMES     4203
+#define BGCD3_NEXTPRIME 40009
 
 void _GMP_init(void)
 {
@@ -38,6 +41,7 @@ void _GMP_init(void)
   mpz_init(_bgcd);
   _GMP_pn_primorial(_bgcd, BGCD_PRIMES);   /* mpz_primorial_ui(_bgcd, 1000) */
   mpz_init_set_ui(_bgcd2, 0);
+  mpz_init_set_ui(_bgcd3, 0);
 }
 
 void _GMP_destroy(void)
@@ -46,6 +50,7 @@ void _GMP_destroy(void)
   clear_randstate();
   mpz_clear(_bgcd);
   mpz_clear(_bgcd2);
+  mpz_clear(_bgcd3);
   destroy_ecpp_gcds();
 }
 
@@ -55,7 +60,9 @@ static const unsigned char next_wheel[30] =
 static const unsigned char prev_wheel[30] =
   {29,29,1,1,1,1,1,1,7,7,7,7,11,11,13,13,13,13,17,17,19,19,19,19,23,23,23,23,23,23};
 static const unsigned char wheel_advance[30] =
-  {0,6,0,0,0,0,0,4,0,0,0,2,0,4,0,0,0,2,0,4,0,0,0,6,0,0,0,0,0,2};
+  {1,6,5,4,3,2,1,4,3,2,1,2,1,4,3,2,1,2,1,4,3,2,1,6,5,4,3,2,1,2};
+static const unsigned char wheel_retreat[30] =
+  {1,2,1,2,3,4,5,6,1,2,3,4,1,2,1,2,3,4,1,2,1,2,3,4,1,2,3,4,5,6};
 
 
 static INLINE int _GMP_miller_rabin_ui(mpz_t n, UV base)
@@ -155,10 +162,10 @@ void _GMP_lucas_seq(mpz_t U, mpz_t V, mpz_t n, IV P, IV Q, mpz_t k,
   UV b = mpz_sizeinbase(k, 2);
   IV D = P*P - 4*Q;
 
-  MPUassert( mpz_cmp_ui(n, 2) >= 0, "lucas_seq: n is less than 2" );
+  if (mpz_cmp_ui(n, 2) < 0) croak("Lucas sequence modulus n must be > 1");
   MPUassert( mpz_cmp_ui(k, 0) >= 0, "lucas_seq: k is negative" );
-  MPUassert( P >= 0 && mpz_cmp_si(n, P) >= 0, "lucas_seq: P is out of range" );
-  MPUassert( mpz_cmp_si(n, Q) >= 0, "lucas_seq: Q is out of range" );
+  MPUassert( mpz_cmp_si(n,(P>=0) ? P : -P) > 0, "lucas_seq: P is out of range");
+  MPUassert( mpz_cmp_si(n,(Q>=0) ? Q : -Q) > 0, "lucas_seq: Q is out of range");
   MPUassert( D != 0, "lucas_seq: D is zero" );
 
   if (mpz_cmp_ui(k, 0) <= 0) {
@@ -741,10 +748,14 @@ int _GMP_is_prob_prime(mpz_t n)
   if (mpz_cmp_ui(n, BGCD_NEXTPRIME) < 0)
     return _GMP_trial_factor(n, 2, BGCD_LASTPRIME) ? 0 : 2;
 
-  /* Check for tiny divisors (GMP can do these really fast) */
-  if ( mpz_even_p(n)
-    || mpz_divisible_ui_p(n, 3)
-    || mpz_divisible_ui_p(n, 5) ) return 0;
+  /* Check for tiny divisors */
+  if (mpz_even_p(n)) return 0;
+  if (sizeof(unsigned long) < 8) {
+    if (mpz_gcd_ui(NULL, n, 3234846615UL) != 1) return 0;           /* 3-29 */
+  } else {
+    if (mpz_gcd_ui(NULL, n, 16294579238595022365UL) != 1) return 0; /* 3-53 */
+    if (mpz_gcd_ui(NULL, n,  7145393598349078859UL) != 1) return 0; /* 59-101 */
+  }
 
   {
     UV log2n = mpz_sizeinbase(n,2);
@@ -761,7 +772,15 @@ int _GMP_is_prob_prime(mpz_t n)
       { mpz_clear(t); return 2; }
 
     /* If we're reasonably large, do a gcd with more primes */
-    if (log2n > 128) {
+    if (log2n > 700) {
+      if (mpz_sgn(_bgcd3) == 0) {
+        _GMP_pn_primorial(_bgcd3, BGCD3_PRIMES);
+        mpz_divexact(_bgcd3, _bgcd3, _bgcd);
+      }
+      mpz_gcd(t, n, _bgcd3);
+      if (mpz_cmp_ui(t, 1))
+        { mpz_clear(t); return 0; }
+    } else if (log2n > 300) {
       if (mpz_sgn(_bgcd2) == 0) {
         _GMP_pn_primorial(_bgcd2, BGCD2_PRIMES);
         mpz_divexact(_bgcd2, _bgcd2, _bgcd);
@@ -787,11 +806,11 @@ int _GMP_is_prob_prime(mpz_t n)
     if (log2n > 16000) {
       double dB = (double)log2n * (double)log2n * 0.005;
       if (BITS_PER_WORD == 32 && dB > 4200000000.0) dB = 4200000000.0;
-      if (_GMP_trial_factor(n, BGCD2_NEXTPRIME, (UV)dB))  return 0;
-    } else if (log2n > 3000) {
-      if (_GMP_trial_factor(n, BGCD2_NEXTPRIME, 80*log2n))  return 0;
-    } else if (log2n > 1000) {
-      if (_GMP_trial_factor(n, BGCD2_NEXTPRIME, 30*log2n))  return 0;
+      if (_GMP_trial_factor(n, BGCD3_NEXTPRIME, (UV)dB))  return 0;
+    } else if (log2n > 4000) {
+      if (_GMP_trial_factor(n, BGCD3_NEXTPRIME, 80*log2n))  return 0;
+    } else if (log2n > 1600) {
+      if (_GMP_trial_factor(n, BGCD3_NEXTPRIME, 30*log2n))  return 0;
     }
   }
 
@@ -1157,63 +1176,52 @@ int _GMP_is_aks_prime(mpz_t n)
 /* Modifies argument */
 void _GMP_next_prime(mpz_t n)
 {
-  mpz_t d;
-  UV m;
+  UV m, m23;
+  if (mpz_cmp_ui(n, 29) < 0) { /* small inputs */
 
-  /* small inputs */
-  if (mpz_cmp_ui(n, 7) < 0) {
-    if      (mpz_cmp_ui(n, 2) < 0) { mpz_set_ui(n, 2); }
-    else if (mpz_cmp_ui(n, 3) < 0) { mpz_set_ui(n, 3); }
-    else if (mpz_cmp_ui(n, 5) < 0) { mpz_set_ui(n, 5); }
-    else                           { mpz_set_ui(n, 7); }
-    return;
-  }
+    m = mpz_get_ui(n);
+    m = (m < 2) ? 2 : (m < 3) ? 3 : (m < 5) ? 5 : next_wheel[m];
+    mpz_set_ui(n, m);
 
-  mpz_init(d);
-  m = mpz_fdiv_q_ui(d, n, 30);
-
-  if (m == 29) {
-    mpz_add_ui(d, d, 1);
-    m = 1;
   } else {
-    m = next_wheel[m];
+
+    m23 = mpz_fdiv_ui(n, 223092870UL);  /* 2*3*5*7*11*13*17*19*23 */
+    m = m23 % 30;
+    do {
+      UV skip = wheel_advance[m];
+      mpz_add_ui(n, n, skip);
+      m23 += skip;
+      m = next_wheel[m];
+    } while ( !(m23% 7) || !(m23%11) || !(m23%13) || !(m23%17) ||
+              !(m23%19) || !(m23%23) || !_GMP_is_prob_prime(n) );
+
   }
-  mpz_mul_ui(n, d, 30);
-  mpz_add_ui(n, n, m);
-  while (1) {
-    if (_GMP_is_prob_prime(n))
-      break;
-    mpz_add_ui(n, n, wheel_advance[m]);
-    m = next_wheel[m];
-  }
-  mpz_clear(d);
 }
 
 /* Modifies argument */
 void _GMP_prev_prime(mpz_t n)
 {
-  mpz_t d;
-  UV m;
+  UV m, m23;
+  if (mpz_cmp_ui(n, 29) <= 0) { /* small inputs */
 
-  /* small inputs */
-  if (mpz_cmp_ui(n, 2) <= 0) { mpz_set_ui(n, 0); return; }
-  if (mpz_cmp_ui(n, 3) <= 0) { mpz_set_ui(n, 2); return; }
-  if (mpz_cmp_ui(n, 5) <= 0) { mpz_set_ui(n, 3); return; }
-  if (mpz_cmp_ui(n, 7) <= 0) { mpz_set_ui(n, 5); return; }
+    m = mpz_get_ui(n);
+    m = (m < 3) ? 0 : (m < 4) ? 2 : (m < 6) ? 3 : (m < 8) ? 5 : prev_wheel[m];
+    mpz_set_ui(n, m);
 
-  mpz_init(d);
-  m = mpz_fdiv_q_ui(d, n, 30);
+  } else {
 
-  while (1) {
-    m = prev_wheel[m];
-    if (m == 29)
-      mpz_sub_ui(d, d, 1);
-    mpz_mul_ui(n, d, 30);
-    mpz_add_ui(n, n, m);
-    if (_GMP_is_prob_prime(n))
-      break;
+    m23 = mpz_fdiv_ui(n, 223092870UL);  /* 2*3*5*7*11*13*17*19*23 */
+    m = m23 % 30;
+    m23 += 223092870UL;  /* No need to re-mod inside the loop */
+    do {
+      UV skip = wheel_retreat[m];
+      mpz_sub_ui(n, n, skip);
+      m23 -= skip;
+      m = prev_wheel[m];
+    } while ( !(m23% 7) || !(m23%11) || !(m23%13) || !(m23%17) ||
+              !(m23%19) || !(m23%23) || !_GMP_is_prob_prime(n) );
+
   }
-  mpz_clear(d);
 }
 
 #define LAST_DOUBLE_PROD \

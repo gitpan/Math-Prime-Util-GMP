@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.19';
+  $Math::Prime::Util::GMP::VERSION = '0.20';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -20,6 +20,7 @@ our @EXPORT_OK = qw(
                      is_aks_prime
                      is_nminus1_prime
                      is_ecpp_prime
+                     is_pseudoprime
                      is_strong_pseudoprime
                      is_lucas_pseudoprime
                      is_strong_lucas_pseudoprime
@@ -45,7 +46,7 @@ our @EXPORT_OK = qw(
                      pn_primorial
                      consecutive_integer_lcm
                      partitions
-                     gcd lcm kronecker
+                     gcd lcm kronecker valuation invmod binomial gcdext vecsum
                      exp_mangoldt
                      is_power
                    );
@@ -160,6 +161,8 @@ __END__
 
 =encoding utf8
 
+=for stopwords Möbius Deléglise Bézout gcdext vecsum
+
 =head1 NAME
 
 Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using GMP
@@ -167,7 +170,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.19
+Version 0.20
 
 
 =head1 SYNOPSIS
@@ -361,6 +364,13 @@ verification.  Proof types used include:
   BLS15
   BLS5
   Small
+
+=head2 is_pseudoprime
+
+Takes a positive number C<n> and a base C<a> as input, and returns 1 if
+C<n> is a probable prime to base C<a>.  This is the simple Fermat primality
+test.  Removing primes, given base 2 this produces the sequence
+L<OEIS A001567|http://oeis.org/A001567>.
 
 =head2 is_strong_pseudoprime
 
@@ -655,6 +665,19 @@ often used to test for L<coprimality|https://oeis.org/wiki/Coprimality>.
 
 Given a list of integers, returns the least common multiple.
 
+=head2 gcdext
+
+Given two integers C<x> and C<y>, returns C<u,v,d> such that C<d = gcd(x,y)>
+and C<u*x + v*y = d>.  This uses the extended Euclidian algorithm to compute
+the values satisfying Bézout's Identity.
+
+This corresponds to Pari's C<gcdext> function, which was renamed from
+C<bezout> out Pari 2.6.  The results will hence match L<Math::Pari/bezout>.
+
+=head2 vecsum
+
+Returns the sum of all arguments, each of which must be an integer.
+
 =head2 kronecker
 
 Returns the Kronecker symbol C<(a|n)> for two integers.  The possible
@@ -670,6 +693,39 @@ The Jacobi symbol is itself an extension of the Legendre symbol, which is
 only defined for odd prime values of C<n>.  This corresponds to Pari's
 C<kronecker(a,n)> function and Mathematica's C<KroneckerSymbol[n,m]>
 function.
+
+=head2 binomial
+
+Given integer arguments C<n> and C<k>, returns the binomial coefficient
+C<n*(n-1)*...*(n-k+1)/k!>, also known as the choose function.  Negative
+arguments use the L<Kronenburg extensions|http://arxiv.org/abs/1105.3689/>.
+This corresponds to Mathematica's C<Binomial[n,k]> function, Pari's
+C<binomial(n,k)> function, and GMP's C<mpz_bin_ui> function.
+
+For negative arguments, this matches Mathematica.  Pari does not implement
+the C<n E<lt> 0, k E<lt>= n> extension and instead returns C<0> for this
+case.  GMP's API does not allow negative C<k> but otherwise matches.
+L<Math::BigInt> does not implement any extensions and the results for
+C<n E<lt> 0, k > 0> are undefined.
+
+
+=head2 valuation
+
+  say "$n is divisible by 2 ", valuation($n,2), " times.";
+
+Given integers C<n> and C<k>, returns the numbers of times C<n> is divisible
+by C<k>.  This is a very limited version of the algebraic valuation meaning,
+just applied to integers.
+This corresponds to Pari's C<valuation> function.
+C<0> is returned if C<n> or C<k> is one of the values C<-1>, C<0>, or C<1>.
+
+=head2 invmod
+
+  say "The inverse of 42 mod 2017 = ", invmod(42,2017);
+
+Given two integers C<a> and C<n>, return the inverse of C<a> modulo C<n>.
+If not defined, undef is returned.  If defined, then the return value
+multiplied by C<a> equals C<1> modulo C<n>.
 
 
 =head2 consecutive_integer_lcm

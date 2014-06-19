@@ -1,5 +1,21 @@
 Revision history for Perl module Math::Prime::Util::GMP
 
+0.20 2014-06-18
+
+    [ADDED]
+
+    - valuation(a,b)                      how many times does b divide a?
+    - invmod(a,n)                         inverse of a modulo n
+    - is_pseudoprime(n,base)              Simple Fermat test
+    - binomial(n,k)                       binomial coefficient
+    - gcdext(a,b)                         extended Euclidian algorithm
+    - vecsum(...)                         sum list of integers
+
+    [OTHER]
+
+    - 10%-ish speedup for next/prev prime with 38-950 digit inputs.
+
+
 0.19 2014-04-21
 
     [ADDED]
