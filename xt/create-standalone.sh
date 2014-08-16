@@ -8,6 +8,7 @@ fi
 cp -p ptypes.h standalone/
 cp -p ecpp.[ch] bls75.[ch] ecm.[ch] prime_iterator.[ch] standalone/
 cp -p gmp_main.[ch] small_factor.[ch] utility.[ch] standalone/
+cp -p xt/expr.[ch] xt/expr-impl.h standalone/
 cp -p xt/proof-text-format.txt standalone/
 cp -p examples/verify-cert.pl standalone/
 cp -p examples/vcert.c standalone/
@@ -22,6 +23,7 @@ else
 fi
 
 # Standalone ECPP doesn't need SIMPQS, so let's not include it.
+# Warning however:  large BLS75 proofs won't be practical without it.
 cat << 'EOSIMPQSH' > standalone/simpqs.h
 #ifndef MPU_SIMPQS_H
 #define MPU_SIMPQS_H
@@ -30,7 +32,7 @@ static int _GMP_simpqs(mpz_t n, mpz_t* farray) { return 0; }
 #endif
 EOSIMPQSH
 
-# gcc -O3 -fomit-frame-pointer -DSTANDALONE -DSTANDALONE_ECPP ecpp.c bls75.c ecm.c prime_iterator.c gmp_main.c small_factor.c utility.c -o ecpp-dj -lgmp -lm
+# gcc -O3 -fomit-frame-pointer -DSTANDALONE -DSTANDALONE_ECPP ecpp.c bls75.c ecm.c prime_iterator.c gmp_main.c small_factor.c utility.c expr.c -o ecpp-dj -lgmp -lm
 
 cat << 'EOM' > standalone/Makefile
 TARGET = ecpp-dj
@@ -39,7 +41,8 @@ DEFINES = -DSTANDALONE -DSTANDALONE_ECPP
 CFLAGS = -O3 -g -Wall $(DEFINES)
 LIBS = -lgmp -lm
 
-OBJ = ecpp.o bls75.o ecm.o prime_iterator.o gmp_main.o small_factor.o utility.o
+OBJ = ecpp.o bls75.o ecm.o prime_iterator.o gmp_main.o small_factor.o \
+      utility.o expr.o
 HEADERS = ptypes.h class_poly_data.h
 
 .PHONY: default all clean
@@ -96,13 +99,13 @@ INSTALLATION:
      #   wget http://probableprime.org/ecpp/cpd/huge/class_poly_data.h.gz
      #   gunzip class_poly_data.h.gz
 
-This is a standalone version of the ECPP implemention written for the Perl
+This is a standalone version of the ECPP implementation written for the Perl
 module Math::Prime::Util::GMP in 2013.  This uses a "Factor All" strategy, and
 closely follows the papers by Atkin and Morain.  Most of the utility functions
 closely follow the algorithms presented in Cohen's book "A Course in
 Computational Algebraic Number Theory".  Almost all the factoring is done
 with my p-1 implementation.  The ECM factoring and manipulation was heavily
-insipired by GMP-ECM by Phil Zimmerman and many others.
+inspired by GMP-ECM by Paul Zimmermann and many others.
 
 This includes a BPSW test (strong PRP-2 test followed by extra strong
 Lucas-Selfridge test).  We use this to (1) detect composites, and (2) prove
@@ -125,14 +128,17 @@ because of its large speed advantage for 1000+ digit numbers, especially on
 multi-processor machines.
 
 Quick performance comparisons:
- - Primo is slower under ~300 digits, *much* faster as input grows.
+ - Primo is slower under ~500 digits, *much* faster as input grows.
  - GMP-ECPP 2.49 is very, very slow.  Nearly unusable once over 500 digits.
  - Morain's ancient 6.4.5a ECPP is similar under 300 digits, but gets slower.
- - David Cleaver's mpz_aprcl is a tiny bit slower under ~700 digits, but gets
+ - David Cleaver's mpz_aprcl is a tiny bit slower under ~500 digits, but gets
    faster for larger inputs (2-3x faster at 2000 digits).  Note that APR-CL
    does not produce a certificate.
+ - Using the latest GMP (e.g. 6.0.0a or later) will substantially help
+   performance of this code as well as mpz_aprcl.
  - AKS is not currently a viable method, with all known implementations being
-   millions of times slower than alternative methods (ECPP or APR-CL).
+   millions of times slower than alternative methods (ECPP or APR-CL).  This
+   code includes the fastest AKS implementation I know, but this still holds.
 
 Some areas to concentrate on:
 

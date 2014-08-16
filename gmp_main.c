@@ -751,10 +751,10 @@ int _GMP_is_prob_prime(mpz_t n)
   /* Check for tiny divisors */
   if (mpz_even_p(n)) return 0;
   if (sizeof(unsigned long) < 8) {
-    if (mpz_gcd_ui(NULL, n, UVCONST(3234846615)) != 1) return 0;           /* 3-29 */
+    if (mpz_gcd_ui(NULL, n, 3234846615UL) != 1) return 0;           /*  3-29 */
   } else {
-    if (mpz_gcd_ui(NULL, n, UVCONST(16294579238595022365)) != 1) return 0; /* 3-53 */
-    if (mpz_gcd_ui(NULL, n, UVCONST( 7145393598349078859)) != 1) return 0; /* 59-101 */
+    if (mpz_gcd_ui(NULL, n, 4127218095UL*3948078067UL)!=1) return 0;/*  3-53 */
+    if (mpz_gcd_ui(NULL, n, 4269855901UL*1673450759UL)!=1) return 0;/* 59-101 */
   }
 
   {
@@ -1801,7 +1801,8 @@ int _GMP_holf_factor(mpz_t n, mpz_t f, UV rounds)
       mpz_sqrt(f, m);
       mpz_sub(s, s, f);
       mpz_gcd(f, s, n);
-      mpz_clear(s); mpz_clear(m); return 1;
+      mpz_clear(s); mpz_clear(m);
+      return (mpz_cmp_ui(f, 1) > 0);
     }
   }
   mpz_divexact_ui(n, n, PREMULT);
@@ -2014,6 +2015,7 @@ int _GMP_squfof_factor(mpz_t n, mpz_t f, UV rounds)
 /* See if n is a perfect power */
 UV power_factor(mpz_t n, mpz_t f)
 {
+  if (mpz_cmp_ui(n, 1) <= 0) return 0;
   if (mpz_perfect_power_p(n)) {
     UV k;
     mpz_set_ui(f, 1);

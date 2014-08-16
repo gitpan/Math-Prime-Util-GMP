@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.21';
+  $Math::Prime::Util::GMP::VERSION = '0.22';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -40,7 +40,9 @@ our @EXPORT_OK = qw(
                      holf_factor
                      squfof_factor
                      ecm_factor
+                     qs_factor
                      factor
+                     moebius
                      prime_count
                      primorial
                      pn_primorial
@@ -48,7 +50,13 @@ our @EXPORT_OK = qw(
                      partitions
                      gcd lcm kronecker valuation invmod binomial gcdext vecsum
                      exp_mangoldt
+                     liouville
+                     totient
+                     jordan_totient
+                     carmichael_lambda
                      is_power
+                     znorder
+                     znprimroot
                    );
                    # Should add:
                    # nth_prime
@@ -161,7 +169,7 @@ __END__
 
 =encoding utf8
 
-=for stopwords Möbius Deléglise Bézout gcdext vecsum
+=for stopwords Möbius Deléglise Bézout gcdext vecsum moebius totient liouville znorder znprimroot
 
 =head1 NAME
 
@@ -170,7 +178,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.21
+Version 0.22
 
 
 =head1 SYNOPSIS
@@ -226,8 +234,8 @@ Version 0.21
 
 =head1 DESCRIPTION
 
-A set of utilities related to prime numbers, using GMP.  This includes
-primality tests, getting primes in a range, and factoring.
+A module for number theory in Perl using GMP.  This includes primality tests,
+getting primes in a range, factoring, and more.
 
 While it certainly can be used directly, the main purpose of this
 module is for L<Math::Prime::Util>.  That module will automatically
@@ -709,6 +717,31 @@ L<Math::BigInt> does not implement any extensions and the results for
 C<n E<lt> 0, k > 0> are undefined.
 
 
+=head2 znorder
+
+  $order = znorder(17, "100000000000000000000000065");
+
+Given two positive integers C<a> and C<n>, returns the multiplicative order
+of C<a> modulo C<n>.  This is the smallest positive integer C<k> such that
+C<a^k ≡ 1 mod n>.  Returns 1 if C<a = 1>.  Returns undef if C<a = 0> or if
+C<a> and C<n> are not coprime, since no value will result in 1 mod n.
+This corresponds to Pari's C<znorder(Mod(a,n))> function and Mathematica's
+C<MultiplicativeOrder[a,n]> function.
+
+
+=head2 znprimroot
+
+Given a positive integer C<n>, returns the smallest primitive root
+of C<(Z/nZ)^*>, or C<undef> if no root exists.  A root exists when
+C<euler_phi($n) == carmichael_lambda($n)>, which will be true for
+all prime C<n> and some composites.
+
+L<OEIS A033948|http://oeis.org/A033948> is a sequence of integers where
+the primitive root exists, while L<OEIS A046145|http://oeis.org/A046145>
+is a list of the smallest primitive roots, which is what this function
+produces.
+
+
 =head2 valuation
 
   say "$n is divisible by 2 ", valuation($n,2), " times.";
@@ -718,6 +751,23 @@ by C<k>.  This is a very limited version of the algebraic valuation meaning,
 just applied to integers.
 This corresponds to Pari's C<valuation> function.
 C<0> is returned if C<n> or C<k> is one of the values C<-1>, C<0>, or C<1>.
+
+=head2 moebius
+
+  say "$n is square free" if moebius($n) != 0;
+  $sum += moebius($_) for (1..200); say "Mertens(200) = $sum";
+  say "Mertens(2000) = ", vecsum(moebius(0,2000));
+
+Returns μ(n), the Möbius function (also known as the Moebius, Mobius, or
+MoebiusMu function) for an integer input.  This function is 1 if
+C<n = 1>, 0 if C<n> is not square free (i.e. C<n> has a repeated factor),
+and C<-1^t> if C<n> is a product of C<t> distinct primes.  This is an
+important function in prime number theory.  Like SAGE, we define
+C<moebius(0) = 0> for convenience.
+
+If called with two arguments, they define a range C<low> to C<high>, and the
+function returns an array with the value of the Möbius function for every n
+from low to high inclusive.
 
 =head2 invmod
 
@@ -771,6 +821,46 @@ Hence the return value for C<exp_mangoldt> is:
 
    p   if n = p^m for some prime p and integer m >= 1
    1   otherwise.
+
+
+=head2 totient
+
+  say "The Euler totient of $n is ", totient($n);
+
+Returns φ(n), the Euler totient function (also called Euler's phi or phi
+function) for an integer value.  This is an arithmetic function which counts
+the number of positive integers less than or equal to C<n> that are relatively
+prime to C<n>.  Given the definition used, C<totient> will return 0 for all
+C<n E<lt> 1>.  This follows the logic used by SAGE.  Mathematica and Pari
+return C<totient(-n)> for C<n E<lt> 0>.  Mathematica returns 0 for C<n = 0>,
+Pari pre-2.6.2 raises and exception, and Pari 2.6.2 and newer returns 2.
+
+
+=head2 jordan_totient
+
+  say "Jordan's totient J_$k($n) is ", jordan_totient($k, $n);
+
+Returns Jordan's totient function for a given integer value.  Jordan's totient
+is a generalization of Euler's totient, where
+  C<jordan_totient(1,$n) == euler_totient($n)>
+This counts the number of k-tuples less than or equal to n that form a coprime
+tuple with n.  As with C<totient>, 0 is returned for all C<n E<lt> 1>.
+This function can be used to generate some other useful functions, such as
+the Dedekind psi function, where C<psi(n) = J(2,n) / J(1,n)>.
+
+
+=head2 carmichael_lambda
+
+Returns the Carmichael function (also called the reduced totient function,
+or Carmichael λ(n)) of a positive integer argument.  It is the smallest
+positive integer C<m> such that C<a^m = 1 mod n> for every integer C<a>
+coprime to C<n>.  This is L<OEIS series A002322|http://oeis.org/A002322>.
+
+
+=head2 liouville
+
+Returns λ(n), the Liouville function for a non-negative integer input.
+This is -1 raised to Ω(n) (the total number of prime factors).
 
 
 =head2 is_power

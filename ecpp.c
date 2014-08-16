@@ -27,7 +27,7 @@
  * compile into about 35k of data.  This is about 1/5 of the entire code size
  * for the MPU package.  The github repository includes an expanded set of 5271
  * discriminants that compile to 2MB.  This is recommended if proving 300+
- * digit numbers is a regular occurance.  There is a set available for download
+ * digit numbers is a regular occurrence.  There is a set available for download
  * with almost 15k polys, taking 15.5MB.
  *
  * This version uses the FAS "factor all strategy", meaning it first constructs
@@ -51,8 +51,8 @@
  * Thanks to Schoof, Goldwasser, Kilian, Atkin, Morain, Lenstra, etc. for all
  * the math and publications.  Thanks to Gauss, Euler, et al.
  *
- * The ECM code in ecm.c was heavily influenced by early GMP-ECM work by Phil
- * Zimmerman, as well as all the articles of Montgomery, Bosma, Lentra,
+ * The ECM code in ecm.c was heavily influenced by early GMP-ECM work by Paul
+ * Zimmermann, as well as all the articles of Montgomery, Bosma, Lentra,
  * Cohen, and others.
  */
 
@@ -934,12 +934,13 @@ int _GMP_ecpp(mpz_t N, char** prooftextptr)
 
 #ifdef STANDALONE_ECPP
 static void dieusage(char* prog) {
-  printf("ECPP-DJ version 1.03.  Dana Jacobsen\n\n");
-  printf("Usage: %s [options] <number>\n\n", prog);
+  printf("ECPP-DJ version 1.04.  Dana Jacobsen, 2014.\n\n");
+  printf("Usage: %s [options] <number or expression>\n\n", prog);
   printf("Options:\n");
   printf("   -v     set verbose\n");
   printf("   -V     set extra verbose\n");
-  printf("   -c     print certificate\n");
+  printf("   -q     no output other than return code\n");
+  printf("   -c     print certificate to stdout (redirect to save to a file)\n");
   printf("   -bpsw  use the extra strong BPSW test (probable prime test)\n");
   printf("   -nm1   use n-1 proof only (BLS75 theorem 5)\n");
   printf("   -aks   use AKS for proof\n");
@@ -952,6 +953,8 @@ static void dieusage(char* prog) {
   exit(3);
 }
 
+#include "expr.h"
+
 int main(int argc, char **argv)
 {
   mpz_t n;
@@ -960,6 +963,7 @@ int main(int argc, char **argv)
   int do_aks = 0;
   int do_aprcl = 0;
   int do_bpsw = 0;
+  int be_quiet = 0;
   int retcode = 3;
   char* cert = 0;
 
@@ -976,6 +980,10 @@ int main(int argc, char **argv)
         set_verbose_level(1);
       } else if (strcmp(argv[i], "-V") == 0) {
         set_verbose_level(2);
+      } else if (strcmp(argv[i], "-q") == 0) {
+        be_quiet = 1;
+        set_verbose_level(0);
+        do_printcert = 0;
       } else if (strcmp(argv[i], "-c") == 0) {
         do_printcert = 1;
       } else if (strcmp(argv[i], "-nm1") == 0) {
@@ -994,8 +1002,9 @@ int main(int argc, char **argv)
       }
       continue;
     }
-    mpz_set_str(n, argv[i], 10);
-    /* gmp_printf("%Zd\n", n); */
+    /* mpz_set_str(n, argv[i], 10); */
+    if (mpz_expr(n, 10, argv[i]))  croak("Can't parse input: '%s'\n",argv[i]);
+    if (get_verbose_level() > 1) gmp_printf("N: %Zd\n", n);
 
     isprime = _GMP_is_prob_prime(n);
     /* If isprime = 2 here, that means it's so small it fits in the
@@ -1029,11 +1038,11 @@ int main(int argc, char **argv)
 
     /* printf("(%d digit) ", (int)mpz_sizeinbase(n, 10)); */
     if (isprime == 0) {
-      printf("COMPOSITE\n");
+      if (!be_quiet) printf("COMPOSITE\n");
       retcode = 1;
     } else if (isprime == 1) {
       /* This would normally only be from BPSW */
-      printf("PROBABLY PRIME\n");
+      if (!be_quiet) printf("PROBABLY PRIME\n");
       retcode = 2;
     } else if (isprime == 2) {
       if (do_printcert) {
@@ -1045,7 +1054,7 @@ int main(int argc, char **argv)
         gmp_printf("\n");
         printf("%s", cert);
       } else {
-        printf("PRIME\n");
+        if (!be_quiet) printf("PRIME\n");
       }
       retcode = 0;
     } else {
