@@ -11,6 +11,8 @@ extern int  _GMP_miller_rabin(mpz_t n, mpz_t a);
 extern int  _GMP_is_lucas_pseudoprime(mpz_t n, int strength);
 extern int  _GMP_is_almost_extra_strong_lucas_pseudoprime(mpz_t n, UV incr);
 extern int  _GMP_is_frobenius_underwood_pseudoprime(mpz_t n);
+extern int  is_perrin_pseudoprime(mpz_t n);
+extern int  is_frobenius_pseudoprime(mpz_t n, IV P, IV Q);
 extern int  _GMP_miller_rabin_random(mpz_t n, UV numbases, char* seedstr);
 
 extern void _GMP_lucas_seq(mpz_t U, mpz_t V, mpz_t n, IV P, IV Q, mpz_t k,
@@ -36,10 +38,14 @@ extern int  _GMP_squfof_factor(mpz_t n, mpz_t f, UV rounds);
 extern void _GMP_pn_primorial(mpz_t prim, UV n);
 extern void _GMP_primorial(mpz_t prim, mpz_t n);
 extern void _GMP_lcm_of_consecutive_integers(UV B, mpz_t m);
+extern void bernfrac(mpz_t num, mpz_t den, mpz_t n);
 
 extern UV   power_factor(mpz_t n, mpz_t f);
 extern UV   is_power(mpz_t n, UV a);
 
 extern void exp_mangoldt(mpz_t res, mpz_t n);
+
+extern uint32_t* partial_sieve(mpz_t start, UV length, UV maxprime);
+extern char* pidigits(UV n);
 
 #endif

@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.23';
+  $Math::Prime::Util::GMP::VERSION = '0.24';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -26,10 +26,13 @@ our @EXPORT_OK = qw(
                      is_strong_lucas_pseudoprime
                      is_extra_strong_lucas_pseudoprime
                      is_almost_extra_strong_lucas_pseudoprime
+                     is_perrin_pseudoprime
+                     is_frobenius_pseudoprime
                      is_frobenius_underwood_pseudoprime
                      miller_rabin_random
                      lucas_sequence
                      primes
+                     sieve_primes
                      next_prime
                      prev_prime
                      trial_factor
@@ -46,8 +49,9 @@ our @EXPORT_OK = qw(
                      prime_count
                      primorial
                      pn_primorial
+                     factorial
                      consecutive_integer_lcm
-                     partitions
+                     partitions bernfrac
                      gcd lcm kronecker valuation invmod binomial gcdext vecsum
                      exp_mangoldt
                      liouville
@@ -57,6 +61,7 @@ our @EXPORT_OK = qw(
                      is_power
                      znorder
                      znprimroot
+                     Pi
                    );
                    # Should add:
                    # nth_prime
@@ -135,27 +140,17 @@ sub primes {
   croak "too many parameters to primes" unless scalar @_ <= 2;
   my $low = (@_ == 2)  ?  shift  :  2;
   my $high = shift;
-  my $sref = [];
 
   _validate_positive_integer($low);
   _validate_positive_integer($high);
 
-  return $sref if ($low > $high) || ($high < 2);
+  return [] if $low > $high || $high < 2;
 
-  # Simple trial method for now.
-  return _GMP_trial_primes($low, $high);
+  # Trial if small size.
+  return _GMP_trial_primes($low, $high) if $low < 2_000_000_000;
 
-  # Trial primes without the XS code.  Works fine and is a lot easier than the
-  # XS code (duh -- it's Perl).  But 30-40% slower, mostly due to lots of
-  # string -> mpz -> string conversions and little memory allocations.
-  #
-  #my @primes;
-  #my $curprime = is_prime($low)  ?  $low  :  next_prime($low);
-  #while ($curprime <= $high) {
-  #  push @primes, $curprime;
-  #  $curprime = next_prime($curprime);
-  #}
-  #return \@primes;
+  # Use the partial sieve with BPSW post-filter.
+  [ sieve_primes($low, $high, 0) ];
 }
 
 1;
@@ -169,7 +164,7 @@ __END__
 
 =encoding utf8
 
-=for stopwords Möbius Deléglise Bézout gcdext vecsum moebius totient liouville znorder znprimroot
+=for stopwords Möbius Deléglise Bézout gcdext vecsum moebius totient liouville znorder znprimroot bernfrac
 
 =head1 NAME
 
@@ -178,7 +173,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.22
+Version 0.24
 
 
 =head1 SYNOPSIS
@@ -300,12 +295,21 @@ exactly like C<is_prob_prime>, as will numbers less than C<2^64>.
 For numbers larger than C<2^64>, some additional tests are performed
 on probable primes to see if they can be proven by another means.
 
+This call walks the line between the performance of L</is_prob_prime>
+and the certainty of L</is_provable_prime>.  Those calls may be more
+appropriate in some cases.  What this function does is give most of
+the performance of the former, while adding more certainty.  For finer
+tuning of this tradeoff, especially if performance is critical for
+65- to 200-bit inputs, you may instead use L</is_prob_prime> followed
+by additional probable prime tests such as L</miller_rabin_random>
+and/or L</is_frobenius_underwood_pseudoprime>.
+
 As with L</is_prob_prime>, a BPSW test is first performed.  If this
 indicates "probably prime" then a small number of Miller-Rabin tests
 with random bases are performed.  For numbers under 200 bits, a quick
 BLS75 C<n-1> primality proof is attempted.  This is tuned to give up
-if the result cannot be quickly determined, and results in
-approximately 30% success rate at 128-bits.
+if the result cannot be quickly determined, and results in success
+rates of ~80% at 80 bits, ~30% at 128 bits, and ~13% at 160 bits.
 
 The result is that many numbers will return 2 (definitely prime),
 and the numbers that return 1 (probably prime) have gone through
@@ -510,17 +514,39 @@ pseudoprimes than the extra-strong Lucas test.  However this is still only
 counterexamples have been found with any of the Lucas tests described.
 
 
+=head2 is_perrin_pseudoprime
+
+Takes a positive number C<n> as input and returns 1 if C<n> divides C<P(n)>
+where C<P(n)> is the Perrin number of C<n>.  The Perrin sequence is defined by
+
+   C<P(0) = 3, P(1) = 0, P(2) = 2;  P(n) = P(n-2) + P(n-3)>
+
+This is not a commonly used test, as it runs 5 to 10 times slower than most
+of the other probable prime tests and offers little benefit, especially over
+combined tests like L</is_bpsw_prime> and
+L</is_frobenius_underwood_pseudoprime>.
+
+=head2 is_frobenius_pseudoprime
+
+Takes a positive number C<n> as input, and two optional parameters C<a> and
+C<b>, and returns 1 if the C<n> is a Frobenius probable prime with respect
+to the polynomial C<x^2 - ax + b>.  Without the parameters, C<b = 2> and
+C<a> is the least positive odd number such that C<(a^2-4b|n) = -1>.
+This selection has no pseudoprimes below C<2^64> and none known.  In any
+case, the discriminant C<a^2-4b> must not be a perfect square.
+
 =head2 is_frobenius_underwood_pseudoprime
 
 Takes a positive number as input, and returns 1 if the input passes the
-minimal lambda+2 test (see Underwood 2012 "Quadratic Compositeness Tests"),
-where C<(L+2)^(n-1) = 5 + 2x mod (n, L^2 - Lx + 1)>.  There are no known
-counterexamples, but this is not a well studied test.
+efficient Frobenius test of Paul Underwood.  This selects a parameter C<a>
+as the least positive integer such that C<(a^2-4|n)=-1>, then verifies that
+C<(2+2)^(n+1) = 2a + 5 mod (x^2-ax+1,n)>.  This combines a Fermat and Lucas
+test at a computational cost of about 2.5x a strong pseudoprime test.  This
+makes it similar to, but faster than, a Frobenius test.
 
-The computational cost is about 2.5x the cost of a strong pseudoprime test
-(this will vary somewhat with platform and input size).  It is typically a
-little slower than an extra-strong Lucas test, and faster than a strong
-Lucas test.
+There are no known pseudoprimes to this test.  This test also has no overlap
+with the BPSW test, making it a very effective method for adding additional
+certainty.
 
 =head2 is_bpsw_prime
 
@@ -594,10 +620,6 @@ a lower limit of C<2> if none is given.
 An array reference is returned (with large lists this is much faster and uses
 less memory than returning an array directly).
 
-The current implementation uses repeated calls to C<next_prime>, which is
-good for very small ranges, but not good for large ranges.  A future release
-may use a multi-segmented sieve when appropriate.
-
 
 =head2 next_prime
 
@@ -663,6 +685,12 @@ The two are related with the relationships:
   pn_primorial($n)  ==   primorial( nth_prime($n) )
   primorial($n)     ==   pn_primorial( prime_count($n) )
 
+=head2 factorial
+
+Given positive integer argument C<n>, returns the factorial of C<n>,
+defined as the product of the integers 1 to C<n> with the special case
+of C<factorial(0) = 1>.  This corresponds to Pari's C<factorial(n)>
+and Mathematica's C<Factorial[n]> functions.
 
 =head2 gcd
 
@@ -715,6 +743,13 @@ the C<n E<lt> 0, k E<lt>= n> extension and instead returns C<0> for this
 case.  GMP's API does not allow negative C<k> but otherwise matches.
 L<Math::BigInt> does not implement any extensions and the results for
 C<n E<lt> 0, k > 0> are undefined.
+
+=head2 bernfrac
+
+Returns the Bernoulli number C<B_n> for an integer argument C<n>, as a
+rational number represented by two L<Math::BigInt> objects.  B_1 = 1/2.
+This corresponds to Pari's C<bernfrac(n)> and Mathematica's C<BernoulliB>
+functions.
 
 
 =head2 znorder
@@ -807,6 +842,15 @@ If you want the enumerated partitions, see L<Integer::Partition>.  It is
 very fast and uses an extremely memory efficient iterator.  It is not,
 however, practical for producing the partition I<number> for values
 over 100 or so.
+
+
+=head2 Pi
+
+Takes a positive integer argument C<n> and returns the constant Pi with that
+many digits (including the leading 3).  Rounding is performed.
+
+The implementation uses AGM and is only slightly slower than MPFR (which has
+tighter bounds on the intermediate bits and exit conditions).
 
 
 =head2 exp_mangoldt

@@ -138,6 +138,7 @@ is_lucas_pseudoprime(IN char* strn)
     is_strong_lucas_pseudoprime = 1
     is_extra_strong_lucas_pseudoprime = 2
     is_frobenius_underwood_pseudoprime = 3
+    is_perrin_pseudoprime = 4
   PREINIT:
     mpz_t n;
   CODE:
@@ -148,8 +149,9 @@ is_lucas_pseudoprime(IN char* strn)
       case 0: RETVAL = _GMP_is_lucas_pseudoprime(n, 0); break;
       case 1: RETVAL = _GMP_is_lucas_pseudoprime(n, 1); break;
       case 2: RETVAL = _GMP_is_lucas_pseudoprime(n, 2); break;
-      case 3:
-      default:RETVAL = _GMP_is_frobenius_underwood_pseudoprime(n); break;
+      case 3: RETVAL = _GMP_is_frobenius_underwood_pseudoprime(n); break;
+      case 4:
+      default:RETVAL = is_perrin_pseudoprime(n); break;
     }
     mpz_clear(n);
   OUTPUT:
@@ -166,6 +168,19 @@ is_almost_extra_strong_lucas_pseudoprime(IN char* strn, IN UV increment = 1)
       croak("Increment parameter must be >0 and < 65536");
     PRIMALITY_START("is_almost_extra_strong_lucas_pseudoprime", 1, 0);
     RETVAL = _GMP_is_almost_extra_strong_lucas_pseudoprime(n, increment);
+    mpz_clear(n);
+  OUTPUT:
+    RETVAL
+
+int
+is_frobenius_pseudoprime(IN char* strn, IN IV P = 0, IN IV Q = 0)
+  PREINIT:
+    mpz_t n;
+  CODE:
+    if ((strn != 0) && (strn[0] == '-') )
+      croak("Parameter '%s' must be a positive integer\n", strn);
+    PRIMALITY_START("is_frobenius_pseudoprime", 1, 0);
+    RETVAL = is_frobenius_pseudoprime(n, P, Q);
     mpz_clear(n);
   OUTPUT:
     RETVAL
@@ -322,14 +337,16 @@ primorial(IN char* strn)
     exp_mangoldt = 3
     totient = 4
     carmichael_lambda = 5
-    znprimroot = 6
+    factorial = 6
+    bernfrac = 7
+    znprimroot = 8
   PREINIT:
     mpz_t res, n;
     UV un;
   PPCODE:
     if (strn != 0 && strn[0] == '-') { /* If input is negative... */
-      if (ix == 3)  XSRETURN_UV(1);    /* exp_mangoldt return 1 */
-      if (ix == 6)  strn++;            /* znprimroot flip sign */
+      if (ix == 3)  XSRETURN_IV(1);    /* exp_mangoldt return 1 */
+      if (ix == 8)  strn++;            /* znprimroot flip sign */
     }
     VALIDATE_AND_SET("primorial", n, strn);
     un = mpz_get_ui(n);
@@ -341,10 +358,14 @@ primorial(IN char* strn)
       case 3:  exp_mangoldt(res, n);  break;
       case 4:  totient(res, n);  break;
       case 5:  carmichael_lambda(res, n);  break;
-      case 6:
+      case 6:  mpz_fac_ui(res, un);  break;  /* Uses swing, so let's use it */
+      case 7:  bernfrac(n, res, n);
+               XPUSH_MPZ(n);
+               break;
+      case 8:
       default: znprimroot(res, n);  break;
     }
-    if (ix == 6 && !mpz_sgn(res) && mpz_cmp_ui(n,1) != 0)
+    if (ix == 8 && !mpz_sgn(res) && mpz_cmp_ui(n,1) != 0)
       {  mpz_clear(n);  mpz_clear(res);  XSRETURN_UNDEF;  }
     XPUSH_MPZ(res);
     mpz_clear(n);
@@ -487,10 +508,20 @@ invmod(IN char* stra, IN char* strb)
     }
 
 void partitions(IN UV n)
+  ALIAS:
+    Pi = 1
   PREINIT:
     UV i, j, k;
   PPCODE:
-    if (n == 0) {
+    if (ix ==1) {
+      if (n == 1)
+        XSRETURN_UV(3);
+      else if (n > 0) {
+        char* pi = pidigits(n);
+        XPUSHs(sv_2mortal(newSVpvn(pi, n+1)));
+        Safefree(pi);
+      }
+    } else if (n == 0) {
       XPUSHs(sv_2mortal(newSVuv( 1 )));
     } else if (n <= 3) {
       XPUSHs(sv_2mortal(newSVuv( n )));
@@ -567,6 +598,54 @@ _GMP_trial_primes(IN char* strlow, IN char* strhigh)
   OUTPUT:
     RETVAL
 
+#define TSTAVAL(arr, val)   (arr[(val) >> 6] & (1U << (((val)>>1) & 0x1F)))
+
+void
+sieve_primes(IN char* strlow, IN char* strhigh, IN UV k = 0)
+  PREINIT:
+    mpz_t low, high, t;
+    UV i, length;
+    int test_primality;
+    uint32_t* comp;
+  PPCODE:
+    VALIDATE_AND_SET("sieve_primes", low, strlow);
+    VALIDATE_AND_SET("sieve_primes", high, strhigh);
+    test_primality = 0;
+    if (k < 2) {
+      test_primality = 1;
+      k = 5000 * mpz_sizeinbase(high,2);
+    }
+
+    if (mpz_cmp_ui(low, k) < 0)    croak("TODO: small sieves");
+    if (mpz_even_p(low))           mpz_add_ui(low, low, 1);
+    if (mpz_even_p(high))          mpz_sub_ui(high, high, 1);
+
+    if (mpz_cmp(low, high) <= 0) {
+      mpz_init(t);
+
+      mpz_sqrt(t, high);           /* No need for k to be > sqrt(high) */
+      if (mpz_cmp_ui(t, k) < 0)
+        k = mpz_get_ui(t);
+
+      mpz_sub(t, high, low);
+      length = mpz_get_ui(t) + 1;
+
+      /* Get bit array of odds marked with composites(k) marked with 1 */
+      comp = partial_sieve(low, length, k);
+      /* Convert to corresponding mpz and send to output */
+      for (i = 1; i <= length; i += 2) {
+        if (!TSTAVAL(comp, i)) {
+          mpz_add_ui(t, low, i);
+          if (!test_primality || _GMP_BPSW(t))
+            XPUSH_MPZ( t );
+        }
+      }
+      mpz_clear(t);
+      Safefree(comp);
+    }
+    mpz_clear(low);
+    mpz_clear(high);
+
 void
 lucas_sequence(IN char* strn, IN IV P, IN IV Q, IN char* strk)
   PREINIT:
@@ -618,7 +697,7 @@ trial_factor(IN char* strn, ...)
       int cmpr = mpz_cmp_ui(n,1);
       if (cmpr <= 0) {
         mpz_clear(n);
-        XSRETURN_UV( (cmpr < 0)  ?  0  :  1 );
+        XSRETURN_IV( (cmpr < 0)  ?  0  :  1 );
       }
     }
     arg1 = default_arg1[ix];
