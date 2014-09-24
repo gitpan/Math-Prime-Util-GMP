@@ -1325,9 +1325,42 @@ static void next_prime_with_sieve(mpz_t n) {
         }
       }
     }
-    /* A huge gap found, so sieve another range */
-    Safefree(comp);
+    Safefree(comp);       /* A huge gap found, so sieve another range */
     mpz_add_ui(n, n, width);
+  }
+}
+
+static void prev_prime_with_sieve(mpz_t n) {
+  uint32_t* comp;
+  mpz_t t, base;
+  UV i, j;
+  UV log2n = mpz_sizeinbase(n, 2);
+  UV width = (UV) (NPS_MERIT/1.4427 * (double)log2n + 0.5);
+  UV depth = NPS_DEPTH;
+
+  mpz_sub_ui(n, n, mpz_even_p(n) ? 1 : 2);       /* Set n to prev odd */
+  width = 64 * ((width+63)/64);                /* Round up to next 64 */
+  mpz_init(t);  mpz_init(base);
+  while (1) {
+    mpz_sub_ui(base, n, width-2);
+    /* gmp_printf("sieve from %Zd to %Zd width %lu\n", base, n, width); */
+    comp = partial_sieve(base, width, depth); /* sieve range to depth */
+    /* if (mpz_odd_p(base)) croak("base off after partial");
+       if (width & 1) croak("width is odd after partial"); */
+    for (j = 1; j < width; j += 2) {
+      i = width - j;
+      if (!TSTAVAL(comp, i)) {
+        mpz_add_ui(t, base, i);               /* We found a candidate */
+        if (_GMP_BPSW(t)) {
+          mpz_set(n, t);
+          mpz_clear(t);  mpz_clear(base);
+          Safefree(comp);
+          return;
+        }
+      }
+    }
+    Safefree(comp);       /* A huge gap found, so sieve another range */
+    mpz_sub_ui(n, n, width);
   }
 }
 
@@ -1368,6 +1401,10 @@ void _GMP_prev_prime(mpz_t n)
     m = mpz_get_ui(n);
     m = (m < 3) ? 0 : (m < 4) ? 2 : (m < 6) ? 3 : (m < 8) ? 5 : prev_wheel[m];
     mpz_set_ui(n, m);
+
+  } else if (mpz_sizeinbase(n,2) > 200) {
+
+    return prev_prime_with_sieve(n);
 
   } else {
 
@@ -2288,9 +2325,13 @@ uint32_t* partial_sieve(mpz_t start, UV length, UV maxprime)
   mpz_t t;
   PRIME_ITERATOR(iter);
 
+  /* mpz_init(t);
+     mpz_add_ui(t, start, (length & 1) ? length-1 : length-2);
+     gmp_printf("partial sieve start %Zd  length %lu mark %Zd to %Zd\n", start, length, start, t); */
   MPUassert(mpz_odd_p(start), "partial sieve given even start");
   MPUassert(length > 0, "partial sieve given zero length");
   mpz_sub_ui(start, start, 1);
+  if (length & 1) length++;
   Newz(0, comp, (length+63)/64, uint32_t);
   mpz_init(t);
 
@@ -2315,7 +2356,7 @@ char* pidigits(UV n) {
   New(0, out, n+4, char);
   out[0] = '3';  out[1] = '\0';
   if (n <= 1)
-    return;
+    return out;
 
 #if 0
   /* Spigot method.
@@ -2433,7 +2474,6 @@ char* pidigits(UV n) {
   /* AGM using GMP's floating point.  Fast and very good growth. */
   {
     mpf_t x0, y0, resA, resB, Z, var;
-    mp_exp_t exp;
     int i, k;
  
     mpf_set_default_prec(10 + n * 3.322);
@@ -2445,7 +2485,7 @@ char* pidigits(UV n) {
     mpf_init_set_d (Z, 0.25);
     mpf_init (var);
  
-    for (i = 0, k = 1; k < n; i++) {
+    for (i = 0, k = 1; k < (int)n; i++) {
       mpf_add (resA, x0, y0);
       mpf_div_ui (resA, resA, 2);
       mpf_mul (resB, x0, y0);
