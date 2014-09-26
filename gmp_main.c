@@ -1375,7 +1375,7 @@ void _GMP_next_prime(mpz_t n)
 
   } else if (mpz_sizeinbase(n,2) > 120) {
 
-    return next_prime_with_sieve(n);
+    next_prime_with_sieve(n);
 
   } else {
 
@@ -1404,7 +1404,7 @@ void _GMP_prev_prime(mpz_t n)
 
   } else if (mpz_sizeinbase(n,2) > 200) {
 
-    return prev_prime_with_sieve(n);
+    prev_prime_with_sieve(n);
 
   } else {
 
@@ -1530,6 +1530,56 @@ void bernfrac(mpz_t num, mpz_t den, mpz_t zn)
   mpz_clear(t);
   for (k = 1; k <= n; k++)  mpz_clear(T[k]);
   Safefree(T);
+}
+
+void stirling(mpz_t r, unsigned long n, unsigned long m, UV type)
+{
+  mpz_t t, t2;
+  unsigned long j;
+  if (type < 1 || type > 3) croak("stirling type must be 1, 2, or 3");
+  if (n == m) {
+    mpz_set_ui(r, 1);
+  } else if (n == 0 || m == 0 || m > n) {
+    mpz_set_ui(r,0);
+  } else if (m == 1) {
+    switch (type) {
+      case 1:  mpz_fac_ui(r, n-1);  if (!(n&1)) mpz_neg(r, r); break;
+      case 2:  mpz_set_ui(r, 1); break;
+      case 3:
+      default: mpz_fac_ui(r, n); break;
+    }
+  } else {
+    mpz_init(t);  mpz_init(t2);
+    mpz_set_ui(r,0);
+    if (type == 3) {
+      mpz_bin_uiui(t, n-1, m-1);
+      mpz_fac_ui(t2, n);
+      mpz_mul(r, t, t2);
+      mpz_fac_ui(t2, m);
+      mpz_divexact(r, r, t2);
+    } else if (type == 2) {
+      for (j = 1; j <= m; j++) {
+        mpz_bin_uiui(t, m, j);
+        mpz_ui_pow_ui(t2, j, n);
+        mpz_mul(t, t, t2);
+        if ((m-j) & 1)  mpz_sub(r, r, t);
+        else            mpz_add(r, r, t);
+      }
+      mpz_fac_ui(t, m);
+      mpz_divexact(r, r, t);
+    } else {
+      for (j = 1; j <= n-m; j++) {
+        mpz_bin_uiui(t,  n+j-1, n+j-m);
+        mpz_bin_uiui(t2, n+n-m, n-j-m);
+        mpz_mul(t, t, t2);
+        stirling(t2, n+j-m, j, 2);
+        mpz_mul(t, t, t2);
+        if (j & 1)      mpz_sub(r, r, t);
+        else            mpz_add(r, r, t);
+      }
+    }
+    mpz_clear(t2);  mpz_clear(t);
+  }
 }
 
 
@@ -2472,45 +2522,53 @@ char* pidigits(UV n) {
   }
 #else
   /* AGM using GMP's floating point.  Fast and very good growth. */
+  /* Code from Nigel Galloway 2012 */
   {
-    mpf_t x0, y0, resA, resB, Z, var;
+    mpf_t x0, y0, resA, resB, Z, t, t2;
     int i, k;
+    mp_bitcnt_t oldprec;
  
+    oldprec = mpf_get_default_prec();
     mpf_set_default_prec(10 + n * 3.322);
+    mpf_init(t);  mpf_init(t2);
     mpf_init_set_ui (x0, 1);
-    mpf_init_set_d (y0, 0.5);
-    mpf_sqrt (y0, y0);
+    mpf_init(y0);
     mpf_init (resA);
     mpf_init (resB);
     mpf_init_set_d (Z, 0.25);
-    mpf_init (var);
+
+    mpf_set_d(t, 0.5);
+    mpf_sqrt (y0, t);
  
     for (i = 0, k = 1; k < (int)n; i++) {
       mpf_add (resA, x0, y0);
       mpf_div_ui (resA, resA, 2);
-      mpf_mul (resB, x0, y0);
-      mpf_sqrt (resB, resB);
+      mpf_mul (t, x0, y0);
+      mpf_sqrt (resB, t);
 
-      mpf_sub(var, resA, x0);
-      mpf_mul(var, var, var);
-      mpf_mul_ui(var, var, k);
-      mpf_sub(Z, Z, var);
+      mpf_sub(t, resA, x0);
+      mpf_mul(t2, t, t);
+      mpf_mul_ui(t, t2, k);
+      mpf_sub(Z, Z, t);
       k += k;
 
       mpf_add (x0, resA, resB);
       mpf_div_ui (x0, x0, 2);
-      mpf_mul (y0, resA, resB);
-      mpf_sqrt (y0, y0);
+      mpf_mul (t, resA, resB);
+      mpf_sqrt (y0, t);
 
-      mpf_sub(var, x0, resA);
-      mpf_mul(var, var, var);
-      mpf_mul_ui(var, var, k);
-      mpf_sub(Z, Z, var);
+      mpf_sub(t, x0, resA);
+      mpf_mul(t2, t, t);
+      mpf_mul_ui(t, t2, k);
+      mpf_sub(Z, Z, t);
       k += k;
     }
-    mpf_mul(x0, x0, x0);
-    mpf_div(x0, x0, Z);
+    mpf_mul(t, x0, x0);
+    mpf_div(x0, t, Z);
     gmp_sprintf(out, "%.*Ff", (int)(n-1), x0);
+    mpf_clear(Z); mpf_clear(resB); mpf_clear(resA);
+    mpf_clear(y0); mpf_clear(x0); mpf_clear(t); mpf_clear(t2);
+    mpf_set_default_prec(oldprec);
   }
 #endif
   return out;

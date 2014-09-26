@@ -89,7 +89,8 @@ _GMP_miller_rabin(IN char* strn, ...)
       mpz_clear(nm1);
       RETVAL = !mpz_cmp_ui(a,1);
     }
-    mpz_clear(n);  mpz_clear(a);
+    mpz_clear(a);
+    mpz_clear(n);
   OUTPUT:
     RETVAL
 
@@ -378,14 +379,28 @@ gcd(...)
   ALIAS:
     lcm = 1
     vecsum = 2
+    vecprod = 3
   PREINIT:
     int i;
     mpz_t ret, n;
   PPCODE:
-    if (items == 0)
-      XSRETURN_IV(0);
+    if (items == 0) XSRETURN_IV( (ix == 3) ? 1 : 0);
+    if (ix == 3) {
+      mpz_t* list;
+      New(0, list, items, mpz_t);
+      for (i = 0; i < items; i++) {
+        char* strn = SvPV_nolen(ST(i));
+        validate_string_number("vecprod", (strn[0]=='-') ? strn+1 : strn);
+        mpz_init_set_str(list[i], strn, 10);
+      }
+      mpz_product(list, 0, items-1);
+      XPUSH_MPZ(list[0]);
+      for (i = 0; i < items; i++)  mpz_clear(list[i]);
+      Safefree(list);
+      XSRETURN(1);
+    }
     mpz_init(n);
-    mpz_init_set_ui(ret, (ix == 1) ? 1 : 0);
+    mpz_init_set_ui(ret, (ix == 1 || ix == 3) ? 1 : 0);
     for (i = 0; i < items; i++) {
       char* strn = SvPV_nolen(ST(i));
       validate_string_number("gcd/lcm", (strn[0]=='-') ? strn+1 : strn);
@@ -394,8 +409,9 @@ gcd(...)
       switch (ix) {
         case 0:  mpz_gcd(ret, ret, n); break;
         case 1:  mpz_lcm(ret, ret, n); break;
-        case 2:
-        default: mpz_add(ret, ret, n); break;
+        case 2:  mpz_add(ret, ret, n); break;
+        case 3:
+        default: mpz_mul(ret, ret, n); break;
       }
     }
     XPUSH_MPZ(ret);
@@ -468,44 +484,39 @@ invmod(IN char* stra, IN char* strb)
     jordan_totient = 3
     znorder = 4
   PREINIT:
-    mpz_t ret, a, b;
-    int invertok;
+    mpz_t a, b, t;
+    int retundef;
   PPCODE:
     validate_string_number("invmod", (stra[0]=='-') ? stra+1 : stra);
     validate_string_number("invmod", (strb[0]=='-') ? strb+1 : strb);
     mpz_init_set_str(a, stra, 10);
     mpz_init_set_str(b, strb, 10);
+    retundef = 0;
     if (ix == 0) {
-      mpz_init(ret);
-      if (!mpz_sgn(b) || !mpz_sgn(a))  invertok = 0; /* undef if a|b is zero */
-      else if (!mpz_cmp_ui(b,1))       invertok = 1; /* return 0 */
-      else                             invertok = mpz_invert(ret, a, b);
-      if (invertok) XPUSH_MPZ(ret);
-      mpz_clear(ret);
-      mpz_clear(b); mpz_clear(a);
-      if (!invertok) XSRETURN_UNDEF;
+      /* undef if a|b is zero, 0 if b is 1, otherwise result of mpz_invert */
+      if (!mpz_sgn(b) || !mpz_sgn(a))  retundef = 1;
+      else if (!mpz_cmp_ui(b,1))       mpz_set_ui(a,0);
+      else                             retundef = !mpz_invert(a,a,b);
     } else if (ix == 1) {
       if (mpz_sgn(b) < 0) {   /* Handle negative k */
         if (mpz_sgn(a) >= 0 || mpz_cmp(b,a) > 0)  mpz_set_ui(a, 0);
         else                                      mpz_sub(b, a, b);
       }
       mpz_bin_ui(a, a, mpz_get_ui(b));
-      XPUSH_MPZ(a);
-      mpz_clear(b); mpz_clear(a);
     } else if (ix == 2) {
-      mpz_init(ret);
-      mpz_gcdext(ret, a, b, a, b);
-      XPUSH_MPZ(a);  XPUSH_MPZ(b);  XPUSH_MPZ(ret);
-      mpz_clear(b); mpz_clear(a);
+      mpz_init(t);
+      mpz_gcdext(a, t, b, a, b);
+      XPUSH_MPZ(t);  XPUSH_MPZ(b);
+      mpz_clear(t);
     } else if (ix == 3) {
-      jordan_totient(b, b, mpz_get_ui(a));
-      XPUSH_MPZ(b);
-      mpz_clear(b); mpz_clear(a);
+      jordan_totient(a, b, mpz_get_ui(a));
     } else {
       znorder(a, a, b);
-      if (mpz_sgn(a)) { XPUSH_MPZ(a);  mpz_clear(a);  mpz_clear(b); }
-      else            { mpz_clear(a); mpz_clear(b); XSRETURN_UNDEF; }
+      if (!mpz_sgn(a)) retundef = 1;
     }
+    if (!retundef) XPUSH_MPZ(a);
+    mpz_clear(b); mpz_clear(a);
+    if (retundef) XSRETURN_UNDEF;
 
 void partitions(IN UV n)
   ALIAS:
@@ -515,7 +526,7 @@ void partitions(IN UV n)
   PPCODE:
     if (ix ==1) {
       if (n == 1)
-        XSRETURN_UV(3);
+        XSRETURN_IV(3);
       else if (n > 0) {
         char* pi = pidigits(n);
         XPUSHs(sv_2mortal(newSVpvn(pi, n+1)));
@@ -556,6 +567,16 @@ void partitions(IN UV n)
       Safefree(part);
       Safefree(pent);
     }
+
+void
+stirling(IN UV n, IN UV m, IN UV type = 1)
+  PREINIT:
+    mpz_t r;
+  PPCODE:
+    mpz_init(r);
+    stirling(r, n, m, type);
+    XPUSH_MPZ( r );
+    mpz_clear(r);
 
 SV*
 _GMP_trial_primes(IN char* strlow, IN char* strhigh)
@@ -767,6 +788,7 @@ trial_factor(IN char* strn, ...)
         XPUSH_MPZ(f);
         mpz_divexact(n, n, f);
       }
+      mpz_clear(f);
     }
     if (mpz_cmp_ui(n,1) > 0)
       XPUSH_MPZ(n);

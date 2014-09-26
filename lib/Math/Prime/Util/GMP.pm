@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.25';
+  $Math::Prime::Util::GMP::VERSION = '0.26';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -51,8 +51,9 @@ our @EXPORT_OK = qw(
                      pn_primorial
                      factorial
                      consecutive_integer_lcm
-                     partitions bernfrac
-                     gcd lcm kronecker valuation invmod binomial gcdext vecsum
+                     partitions bernfrac stirling
+                     gcd lcm kronecker valuation invmod binomial gcdext
+                     vecsum vecprod
                      exp_mangoldt
                      liouville
                      totient
@@ -164,7 +165,7 @@ __END__
 
 =encoding utf8
 
-=for stopwords Möbius Deléglise Bézout gcdext vecsum moebius totient liouville znorder znprimroot bernfrac
+=for stopwords Möbius Deléglise Bézout gcdext vecsum vecprod moebius totient liouville znorder znprimroot bernfrac stirling
 
 =head1 NAME
 
@@ -173,7 +174,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.25
+Version 0.26
 
 
 =head1 SYNOPSIS
@@ -714,6 +715,10 @@ C<bezout> out Pari 2.6.  The results will hence match L<Math::Pari/bezout>.
 
 Returns the sum of all arguments, each of which must be an integer.
 
+=head2 vecprod
+
+Returns the product of all arguments, each of which must be an integer.
+
 =head2 kronecker
 
 Returns the Kronecker symbol C<(a|n)> for two integers.  The possible
@@ -750,6 +755,24 @@ Returns the Bernoulli number C<B_n> for an integer argument C<n>, as a
 rational number represented by two L<Math::BigInt> objects.  B_1 = 1/2.
 This corresponds to Pari's C<bernfrac(n)> and Mathematica's C<BernoulliB>
 functions.
+
+=head2 stirling
+
+  say "s(14,2) = ", stirling(14, 2);
+  say "S(14,2) = ", stirling(14, 2, 2);
+
+Returns the Stirling numbers of either the first kind (default), the
+second kind, or the third kind (the unsigned Lah numbers), with the kind
+selected as an optional third argument.  It takes two non-negative integer
+arguments C<n< and C<k> plus the optional C<type>.  This corresponds to Pari's
+C<stirling(n,k,{type})> function and Mathematica's
+C<StirlingS1> / C<StirlingS2> functions.
+
+Stirling numbers of the first kind are C<-1^(n-k)> times the number of
+permutations of C<n> symbols with exactly C<k> cycles.  Stirling numbers
+of the second kind are the number of ways to partition a set of C<n>
+elements into C<k> non-empty subsets.  The Lah numbers are the number of
+ways to split a set of C<n> elements into C<k> non-empty lists.
 
 
 =head2 znorder
