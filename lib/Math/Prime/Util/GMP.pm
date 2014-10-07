@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.26';
+  $Math::Prime::Util::GMP::VERSION = '0.27';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -174,7 +174,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.26
+Version 0.27
 
 
 =head1 SYNOPSIS
@@ -764,7 +764,7 @@ functions.
 Returns the Stirling numbers of either the first kind (default), the
 second kind, or the third kind (the unsigned Lah numbers), with the kind
 selected as an optional third argument.  It takes two non-negative integer
-arguments C<n< and C<k> plus the optional C<type>.  This corresponds to Pari's
+arguments C<n> and C<k> plus the optional C<type>.  This corresponds to Pari's
 C<stirling(n,k,{type})> function and Mathematica's
 C<StirlingS1> / C<StirlingS2> functions.
 

@@ -1450,10 +1450,8 @@ void _GMP_pn_primorial(mpz_t prim, UV n)
       p = prime_iterator_next(&iter);
       i++;
     }
-    for (i = 0; i < 8; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
-    for (i = 0; i < 4; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
-    for (i = 0; i < 2; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
-    mpz_mul(prim, t[0], t[1]);
+    mpz_product(t, 0, 16-1);
+    mpz_set(prim, t[0]);
     for (i = 0; i < 16; i++)  mpz_clear(t[i]);
   }
   prime_iterator_destroy(&iter);
@@ -1463,7 +1461,7 @@ void _GMP_primorial(mpz_t prim, mpz_t n)
   UV p = 2;
   PRIME_ITERATOR(iter);
 
-  if (mpz_cmp_ui(n, 4000) < 0) {
+  if (mpz_cmp_ui(n, 1000) < 0) {
     /* Simple linear multiplication, one at a time */
     mpz_set_ui(prim, 1);
     while (mpz_cmp_ui(n, p) >= 0) {
@@ -1481,10 +1479,8 @@ void _GMP_primorial(mpz_t prim, mpz_t n)
       p = prime_iterator_next(&iter);
       i++;
     }
-    for (i = 0; i < 8; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
-    for (i = 0; i < 4; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
-    for (i = 0; i < 2; i++)  mpz_mul(t[i], t[2*i], t[2*i+1]);
-    mpz_mul(prim, t[0], t[1]);
+    mpz_product(t, 0, 16-1);
+    mpz_set(prim, t[0]);
     for (i = 0; i < 16; i++)  mpz_clear(t[i]);
   }
   prime_iterator_destroy(&iter);
@@ -1580,6 +1576,60 @@ void stirling(mpz_t r, unsigned long n, unsigned long m, UV type)
     }
     mpz_clear(t2);  mpz_clear(t);
   }
+}
+
+/* Goetgheluck method.  Also thanks to Peter Luschny */
+void binomial(mpz_t r, UV n, UV k)
+{
+  UV fi, nk, sqrtn, piN, prime, i, j;
+  UV* primes;
+  mpz_t* mprimes;
+
+  if (k > n)            { mpz_set_ui(r, 0); return; }
+  if (k == 0 || k == n) { mpz_set_ui(r, 1); return; }
+
+  if (k > n/2)  k = n-k;
+
+  sqrtn = (UV) (sqrt((double)n));
+  fi = 0;
+  nk = n-k;
+  primes = sieve_to_n(n, &piN);
+
+#define PUSHP(p) \
+ do { \
+   if ((j++ % 8) == 0) mpz_init_set_ui(mprimes[fi++], p); \
+   else                mpz_mul_ui(mprimes[fi-1], mprimes[fi-1], p); \
+ } while (0)
+
+  New(0, mprimes, (piN+7)/8, mpz_t);
+
+  for (i = 0, j = 0; i < piN; i++) {
+    prime = primes[i];
+    if (prime > nk) {
+      PUSHP(prime);
+    } else if (prime > n/2) {
+      /* nothing */
+    } else if (prime > sqrtn) {
+      if (n % prime < k % prime)
+        PUSHP(prime);
+    } else {
+      UV N = n, K = k, p = 1, r = 0;
+      while (N > 0) {
+        r = (N % prime) < (K % prime + r) ? 1 : 0;
+        if (r == 1)  p *= prime;
+        N /= prime;
+        K /= prime;
+      }
+      if (p > 1)
+        PUSHP(p);
+    }
+  }
+  Safefree(primes);
+  mpz_product(mprimes, 0, fi-1);
+  mpz_set(r, mprimes[0]);
+  for (i = 0; i < fi; i++)
+    mpz_clear(mprimes[i]);
+  Safefree(mprimes);
 }
 
 
@@ -2522,52 +2572,35 @@ char* pidigits(UV n) {
   }
 #else
   /* AGM using GMP's floating point.  Fast and very good growth. */
-  /* Code from Nigel Galloway 2012 */
   {
-    mpf_t x0, y0, resA, resB, Z, t, t2;
-    int i, k;
-    mp_bitcnt_t oldprec;
- 
-    oldprec = mpf_get_default_prec();
+    mpf_t t, an, bn, tn, prev_an;
+    UV k = 0;
+    unsigned long oldprec = mpf_get_default_prec();
     mpf_set_default_prec(10 + n * 3.322);
-    mpf_init(t);  mpf_init(t2);
-    mpf_init_set_ui (x0, 1);
-    mpf_init(y0);
-    mpf_init (resA);
-    mpf_init (resB);
-    mpf_init_set_d (Z, 0.25);
 
-    mpf_set_d(t, 0.5);
-    mpf_sqrt (y0, t);
+    mpf_init(t);  mpf_init(prev_an);
+    mpf_init_set_d(an, 1);  mpf_init_set_d(bn, 0.5);  mpf_init_set_d(tn, 0.25);
+    mpf_sqrt(bn, bn);
  
-    for (i = 0, k = 1; k < (int)n; i++) {
-      mpf_add (resA, x0, y0);
-      mpf_div_ui (resA, resA, 2);
-      mpf_mul (t, x0, y0);
-      mpf_sqrt (resB, t);
-
-      mpf_sub(t, resA, x0);
-      mpf_mul(t2, t, t);
-      mpf_mul_ui(t, t2, k);
-      mpf_sub(Z, Z, t);
-      k += k;
-
-      mpf_add (x0, resA, resB);
-      mpf_div_ui (x0, x0, 2);
-      mpf_mul (t, resA, resB);
-      mpf_sqrt (y0, t);
-
-      mpf_sub(t, x0, resA);
-      mpf_mul(t2, t, t);
-      mpf_mul_ui(t, t2, k);
-      mpf_sub(Z, Z, t);
-      k += k;
+    while ((n >> k) > 0) {
+      mpf_set(prev_an, an);
+      mpf_add(t, an, bn);
+      mpf_div_ui(an, t, 2);
+      mpf_mul(t, bn, prev_an);
+      mpf_sqrt(bn, t);
+      mpf_sub(prev_an, prev_an, an);
+      mpf_mul(t, prev_an, prev_an);
+      mpf_mul_2exp(t, t, k);
+      mpf_sub(tn, tn, t);
+      k++;
     }
-    mpf_mul(t, x0, x0);
-    mpf_div(x0, t, Z);
-    gmp_sprintf(out, "%.*Ff", (int)(n-1), x0);
-    mpf_clear(Z); mpf_clear(resB); mpf_clear(resA);
-    mpf_clear(y0); mpf_clear(x0); mpf_clear(t); mpf_clear(t2);
+    mpf_add(t, an, bn);
+    mpf_mul(an, t, t);
+    mpf_mul_2exp(t, tn, 2);
+    mpf_div(bn, an, t);
+    gmp_sprintf(out, "%.*Ff", (int)(n-1), bn);
+    mpf_clear(tn); mpf_clear(bn); mpf_clear(an);
+    mpf_clear(prev_an); mpf_clear(t);
     mpf_set_default_prec(oldprec);
   }
 #endif
