@@ -12,6 +12,7 @@
 #include "bls75.h"
 #include "ecpp.h"
 #include "utility.h"
+#include "factor.h"
 
 #define AKS_VARIANT_V6          1    /* The V6 paper with Lenstra impr */
 #define AKS_VARIANT_BORNEMANN   2    /* Based on Folkmar Bornemann's impl */
@@ -46,6 +47,7 @@ void _GMP_init(void)
   _GMP_pn_primorial(_bgcd, BGCD_PRIMES);   /* mpz_primorial_ui(_bgcd, 1000) */
   mpz_init_set_ui(_bgcd2, 0);
   mpz_init_set_ui(_bgcd3, 0);
+  _init_factor();
 }
 
 void _GMP_destroy(void)
@@ -252,6 +254,109 @@ void _GMP_lucas_seq(mpz_t U, mpz_t V, mpz_t n, IV P, IV Q, mpz_t k,
   }
   mpz_mod(U, U, n);
   mpz_mod(V, V, n);
+}
+
+int lucas_lehmer(UV p)
+{
+  UV k, tlim;
+  int res;
+  mpz_t V, mp, t;
+
+  if (p == 2) return 1;
+  if (!(p&1)) return 0;
+
+  mpz_init_set_ui(t, p);
+  if (!_GMP_is_prob_prime(t))    /* p must be prime */
+    { mpz_clear(t); return 0; }
+  if (p < 23)
+    { mpz_clear(t); return (p != 11); }
+  /* If p=3 mod 4 and p,2p+1 both prime, then 2p+1 | 2^p-1.  Cheap test. */
+  if (p > 3 && p % 4 == 3) {
+    mpz_mul_ui(t, t, 2);
+    mpz_add_ui(t, t, 1);
+    if (_GMP_is_prob_prime(t))
+      { mpz_clear(t); return 0; }
+  }
+  mpz_init(mp);
+  mpz_setbit(mp, p);
+  mpz_sub_ui(mp, mp, 1);
+
+  /* Do a little trial division first.  Saves quite a bit of time. */
+  tlim = (p < 1500) ? p/2 : (p < 5000) ? p : 2*p;
+  if (tlim > UV_MAX/(2*p)) tlim = UV_MAX/(2*p);
+  for (k = 1; k < tlim; k++) {
+    UV q = 2*p*k+1;
+    if ((q%8==1 || q%8==7) && mpz_divisible_ui_p(mp, q))
+      { mpz_clear(mp); mpz_clear(t); return 0; }
+  }
+  /* We could do some specialized p+1 factoring here. */
+
+  mpz_init_set_ui(V, 4);
+
+  for (k = 3; k <= p; k++) {
+    mpz_mul(V, V, V);
+    mpz_sub_ui(V, V, 2);
+    /* mpz_mod(V, V, mp) but more efficiently done given mod 2^p-1 */
+    if (mpz_sgn(V) < 0) mpz_add(V, V, mp);
+    /* while (n > mp) { n = (n >> p) + (n & mp) } if (n==mp) n=0 */
+    /* but in this case we can have at most one loop plus a carry */
+    mpz_tdiv_r_2exp(t, V, p);
+    mpz_tdiv_q_2exp(V, V, p);
+    mpz_add(V, V, t);
+    while (mpz_cmp(V, mp) >= 0) mpz_sub(V, V, mp);
+  }
+  res = !mpz_sgn(V);
+  mpz_clear(t); mpz_clear(mp); mpz_clear(V);
+  return res;
+}
+
+/* Returns:  -1 unknown, 0 composite, 2 definitely prime */
+int llr(mpz_t N)
+{
+  mpz_t v, k, V;
+  UV i, n;
+  int res = -1;
+
+  if (mpz_cmp_ui(N,100) <= 0) return (_GMP_is_prob_prime(N) ? 2 : 0);
+  if (mpz_even_p(N) || mpz_divisible_ui_p(N, 3)) return 0;
+  mpz_init(v); mpz_init(k);
+  mpz_add_ui(v, N, 1);
+  n = mpz_scan1(v, 0);
+  mpz_tdiv_q_2exp(k, v, n);
+  /* N = k * 2^n - 1 */
+  if (mpz_cmp_ui(k,1) == 0) {
+    res = lucas_lehmer(n) ? 2 : 0;
+    goto DONE_LLR;
+  }
+  if (mpz_sizeinbase(k,2) > n)
+    goto DONE_LLR;
+
+  mpz_init(V);
+  if (!mpz_divisible_ui_p(k, 3)) { /* Select V for 3 not divis k */
+    mpz_t U, Qk, t;
+    mpz_init(U); mpz_init(Qk); mpz_init(t);
+    _GMP_lucas_seq(U, V, N, 4, 1, k, Qk, t);
+    mpz_clear(t);  mpz_clear(Qk); mpz_clear(U);
+  } else if ((n % 4 == 0 || n % 4 == 3) && mpz_cmp_ui(k,3)==0) {
+    mpz_set_ui(V, 5778);
+  } else {
+    /* TODO: No logic for the k | 3 case yet. */
+    mpz_clear(V);
+    goto DONE_LLR;
+  }
+
+  for (i = 3; i <= n; i++) {
+    mpz_mul(V, V, V);
+    mpz_sub_ui(V, V, 2);
+    mpz_mod(V, V, N);
+  }
+  res = mpz_sgn(V) ? 0 : 2;
+  mpz_clear(V);
+
+DONE_LLR:
+  if (res != -1 && get_verbose_level() > 1) printf("N shown %s with LLR\n", res ? "prime" : "composite");
+  mpz_clear(k); mpz_clear(v);
+  return res;
 }
 
 static int lucas_selfridge_params(IV* P, IV* Q, mpz_t n, mpz_t t)
@@ -852,11 +957,8 @@ UV _GMP_trial_factor(mpz_t n, UV from_n, UV to_n)
  * probability once we've somehow found a BPSW pseudoprime.
  */
 
-int _GMP_is_prob_prime(mpz_t n)
+static int primality_pretest(mpz_t n)
 {
-  /*  Step 1: Look for small divisors.  This is done purely for performance.
-   *          It is *not* a requirement for the BPSW test. */
-
   /* If less than 1009, make trial factor handle it. */
   if (mpz_cmp_ui(n, BGCD_NEXTPRIME) < 0)
     return _GMP_trial_factor(n, 2, BGCD_LASTPRIME) ? 0 : 2;
@@ -926,9 +1028,7 @@ int _GMP_is_prob_prime(mpz_t n)
       if (_GMP_trial_factor(n, BGCD3_NEXTPRIME, 30*log2n))  return 0;
     }
   }
-
-  /*  Step 2: The BPSW test.  spsp base 2 and slpsp. */
-  return _GMP_BPSW(n);
+  return 1;
 }
 
 int _GMP_BPSW(mpz_t n)
@@ -948,10 +1048,35 @@ int _GMP_BPSW(mpz_t n)
   return 1;
 }
 
+int _GMP_is_prob_prime(mpz_t n)
+{
+  /*  Step 1: Look for small divisors.  This is done purely for performance.
+   *          It is *not* a requirement for the BPSW test. */
+  int res = primality_pretest(n);
+  if (res != 1)  return res;
+
+  /* We'd like to do the LLR test here, but it screws with certificates. */
+
+  /*  Step 2: The BPSW test.  spsp base 2 and slpsp. */
+  return _GMP_BPSW(n);
+}
+
 int _GMP_is_prime(mpz_t n)
 {
-  UV nbits = mpz_sizeinbase(n, 2);
-  int prob_prime = _GMP_is_prob_prime(n);
+  UV nbits;
+  /* Similar to is_prob_prime, but put LLR before BPSW, then do more testing */
+
+  /* First, simple pretesting */
+  int prob_prime = primality_pretest(n);
+  if (prob_prime != 1)  return prob_prime;
+
+  /* If the number is of form N=k*2^n-1 and we have a fast proof, do it. */
+  prob_prime = llr(n);
+  if (prob_prime == 0 || prob_prime == 2) return prob_prime;
+
+  /* Start with BPSW */
+  prob_prime = _GMP_BPSW(n);
+  nbits = mpz_sizeinbase(n, 2);
 
   /* n has passed the ES BPSW test, making it quite unlikely it is a
    * composite (and it cannot be if n < 2^64). */
@@ -1008,6 +1133,12 @@ int _GMP_is_prime(mpz_t n)
 int _GMP_is_provable_prime(mpz_t n, char** prooftext)
 {
   int prob_prime = _GMP_is_prob_prime(n);
+
+  /* Try LLR test if they don't need a proof certificate. */
+  if (prooftext == 0) {
+    int res = llr(n);
+    if (res == 0 || res == 2) return res;
+  }
 
   /* Run one more M-R test, just in case. */
   if (prob_prime == 1)
@@ -1903,6 +2034,8 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
     mpz_t b, bm, bmdiff;
     mpz_t precomp_bm[111];
     int   is_precomp[111] = {0};
+    UV* primes = 0;
+    UV sp = 1;
 
     mpz_init(bmdiff);
     mpz_init_set(bm, a);
@@ -1921,13 +2054,19 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
     }
 
     mpz_powm_ui(a, a, q, n );
+    if (B2 < 10000000) {
+      /* grab all the primes at once.  Hack around non-perfect iterator. */
+      primes = sieve_to_n(B2+300, 0);
+      for (sp = B1>>4; primes[sp] <= q; sp++)  ;
+      /* q is primes <= B1, primes[sp] is the next prime */
+    }
 
     j = 31;
     while (q <= B2) {
       UV lastq, qdiff;
 
       lastq = q;
-      q = prime_iterator_next(&iter);
+      q = primes ? primes[sp++] : prime_iterator_next(&iter);
       qdiff = (q - lastq) / 2 - 1;
 
       if (qdiff < 111 && is_precomp[qdiff]) {
@@ -1961,6 +2100,7 @@ int _GMP_pminus1_factor(mpz_t n, mpz_t f, UV B1, UV B2)
       if (is_precomp[j])
         mpz_clear(precomp_bm[j]);
     }
+    if (primes != 0) Safefree(primes);
     if ( (mpz_cmp_ui(f, 1) != 0) && (mpz_cmp(f, n) != 0) )
       goto end_success;
   }

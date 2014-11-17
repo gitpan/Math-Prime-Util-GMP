@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.27';
+  $Math::Prime::Util::GMP::VERSION = '0.28';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -29,6 +29,7 @@ our @EXPORT_OK = qw(
                      is_perrin_pseudoprime
                      is_frobenius_pseudoprime
                      is_frobenius_underwood_pseudoprime
+                     is_mersenne_prime
                      miller_rabin_random
                      lucas_sequence
                      primes
@@ -88,8 +89,9 @@ sub _validate_positive_integer {
   if (ref($n) eq 'Math::BigInt' && $n->can("sign")) {
     croak "Parameter '$n' must be a positive integer" unless $n->sign() eq '+';
   } else {
-    croak "Parameter '$n' must be a positive integer"
-          if $n eq '' || $n =~ tr/0123456789//c;
+    my $sn = "$n";
+    croak "Parameter '$sn' must be a positive integer"
+          if $sn eq '' || $sn =~ tr/0123456789//c;
   }
   croak "Parameter '$n' must be >= $min" if defined $min && $n < $min;
   croak "Parameter '$n' must be <= $max" if defined $max && $n > $max;
@@ -174,7 +176,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.27
+Version 0.28
 
 
 =head1 SYNOPSIS
@@ -540,8 +542,8 @@ case, the discriminant C<a^2-4b> must not be a perfect square.
 
 Takes a positive number as input, and returns 1 if the input passes the
 efficient Frobenius test of Paul Underwood.  This selects a parameter C<a>
-as the least positive integer such that C<(a^2-4|n)=-1>, then verifies that
-C<(2+2)^(n+1) = 2a + 5 mod (x^2-ax+1,n)>.  This combines a Fermat and Lucas
+as the least non-negative integer such that C<(a^2-4|n)=-1>, then verifies that
+C<(x+2)^(n+1) = 2a + 5 mod (x^2-ax+1,n)>.  This combines a Fermat and Lucas
 test at a computational cost of about 2.5x a strong pseudoprime test.  This
 makes it similar to, but faster than, a Frobenius test.
 
@@ -575,6 +577,30 @@ of Bernstein that can reduce this a little, but it would still take years
 for numbers that ECPP or APR-CL can prove in seconds.
 
 Typically you should use L</is_provable_prime> and let it decide the method.
+
+=head2 is_mersenne_prime
+
+  say "2^607-1 (M607) is a Mersenne prime" if is_mersenne_prime(607);
+
+Takes a positive number C<p> as input and returns 1 if C<2^p-1> is prime.
+After some pre-testing, the Lucas-Lehmer test is performed.
+This is a deterministic unconditional test that runs very fast compared
+to other primality methods for numbers of comparable size, and vastly
+faster than any known general-form primality proof methods.
+
+=head2 is_llr_prime
+
+Takes a positive number C<n> as input and returns one of: 0 (definitely
+composite), 2 (definitely prime), or -1 (test does not indicate anything).
+This implements a partial version of the Lucas-Lehmer-Riesel test for
+fast deterministic primality testing on numbers of the form C<k * 2^n - 1>.
+If C<k = 1> then this is a Mersenne number and the Lucas-Lehmer test is used.
+If the number is not of this form, or if C<k E<lt>= 2^n>, then C<-1> will
+be returned as the test does not apply.  In this implementation, some values
+of C<k> are not solved, so they will also return C<-1>.  Otherwise, the LLR
+test is performed.  While not as fast as the Lucas-Lehmer test for Mersenne
+numbers, it is almost as fast as a single strong pseudoprime test (i.e.
+Miller-Rabin test) while giving a certain answer.
 
 =head2 is_nminus1_prime
 
@@ -1107,7 +1133,7 @@ This is Hart's One Line Factorization method, which is a variant of Fermat's
 algorithm.  A premultiplier of 480 is used.  It is very good at factoring
 numbers that are close to perfect squares, or small numbers.  Very naive
 methods of picking RSA parameters sometimes yield numbers in this form, so
-it can be useful to run this a few rounds to check.  For example, the number:
+it can be useful to run a few rounds to check.  For example, the number:
 
   18548676741817250104151622545580576823736636896432849057 \
   10984160646722888555430591384041316374473729421512365598 \

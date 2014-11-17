@@ -1,5 +1,34 @@
 Revision history for Perl module Math::Prime::Util::GMP
 
+0.28 2014-11-17
+
+    [ADDED]
+
+    - is_mersenne_prime(p)      returns 1 iff 2^p-1 is prime
+
+    [PERFORMANCE]
+
+    - is_prime will do a LLR test, as will is_provable_prime if not returning
+      a certificate.  This means many primes of the form k*2^n-1 will run
+      faster and return 2 rather than 1.
+
+    - Update UV SQUFOF factoring code, faster factoring once reduced in size.
+
+    - Slightly better P-1 stage 2 performance.
+
+    - Slightly deeper trial division in general factoring.
+
+    - Big reduction in average depth of unfactored stack.  We work on smaller
+      composite factors first, and add repeated factors all at once.  This
+      fixes some pathological inputs such as:
+          vecprod( map { $_*($_+2)**17 } @{twin_primes(100000,115000)} )
+      which has 2574 factors and would overflow the 256-element stack.  With
+      the new code it has a maximum stack depth of 3.
+
+    [OTHER]
+
+    - is_power works with negative powers, although doesn't return root.
+
 0.27 2014-10-07
 
     [PERFORMANCE]

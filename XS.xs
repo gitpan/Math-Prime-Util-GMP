@@ -192,9 +192,10 @@ is_prime(IN char* strn)
   ALIAS:
     is_prob_prime = 1
     is_aks_prime = 2
-    is_nminus1_prime = 3
-    is_ecpp_prime = 4
-    is_bpsw_prime = 5
+    is_llr_prime = 3
+    is_nminus1_prime = 4
+    is_ecpp_prime = 5
+    is_bpsw_prime = 6
   PREINIT:
     mpz_t n;
     int ret;
@@ -205,9 +206,10 @@ is_prime(IN char* strn)
       case 0: ret = _GMP_is_prime(n); break;
       case 1: ret = _GMP_is_prob_prime(n); break;
       case 2: ret = _GMP_is_aks_prime(n); break;
-      case 3: ret = _GMP_primality_bls_nm1(n, 100, 0); break;
-      case 4: ret = _GMP_ecpp(n, 0); break;
-      case 5:
+      case 3: ret = llr(n); break;
+      case 4: ret = _GMP_primality_bls_nm1(n, 100, 0); break;
+      case 5: ret = _GMP_ecpp(n, 0); break;
+      case 6:
       default:ret = _GMP_BPSW(n); break;
     }
     RETVAL = ret;
@@ -263,11 +265,22 @@ UV
 is_power(IN char* strn, IN UV a = 0)
   PREINIT:
     mpz_t n;
+    int isneg;
   CODE:
+    isneg = (strn[0] == '-');
+    if (isneg) strn++;
     validate_string_number("is_power (n)", strn);
-    mpz_init_set_str(n, strn, 10);
-    RETVAL = is_power(n, a);
-    mpz_clear(n);
+    RETVAL = 0;
+    if (!isneg || (a == 0 || a & 1)) {
+      mpz_init_set_str(n, strn, 10);
+      RETVAL = is_power(n, a);
+      mpz_clear(n);
+    }
+    if (isneg && a == 0 && RETVAL != 0) {
+      UV r = RETVAL;
+      while (!(r & 1)) r >>= 1;
+      RETVAL = (r == 1) ? 0 : r;
+    }
   OUTPUT:
     RETVAL
 
@@ -533,10 +546,13 @@ invmod(IN char* stra, IN char* strb)
 void partitions(IN UV n)
   ALIAS:
     Pi = 1
+    is_mersenne_prime = 2
   PREINIT:
     UV i, j, k;
   PPCODE:
-    if (ix ==1) {
+    if (ix == 2) {
+      XSRETURN_IV(lucas_lehmer(n));
+    } else if (ix == 1) {
       if (n == 1)
         XSRETURN_IV(3);
       else if (n > 0) {
