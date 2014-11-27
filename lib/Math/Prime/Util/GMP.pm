@@ -5,7 +5,7 @@ use Carp qw/croak confess carp/;
 
 BEGIN {
   $Math::Prime::Util::GMP::AUTHORITY = 'cpan:DANAJ';
-  $Math::Prime::Util::GMP::VERSION = '0.28';
+  $Math::Prime::Util::GMP::VERSION = '0.29';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -30,8 +30,9 @@ our @EXPORT_OK = qw(
                      is_frobenius_pseudoprime
                      is_frobenius_underwood_pseudoprime
                      is_mersenne_prime
+                     is_llr_prime
                      miller_rabin_random
-                     lucas_sequence
+                     lucas_sequence  lucasu  lucasv
                      primes
                      sieve_primes
                      next_prime
@@ -167,7 +168,7 @@ __END__
 
 =encoding utf8
 
-=for stopwords Möbius Deléglise Bézout gcdext vecsum vecprod moebius totient liouville znorder znprimroot bernfrac stirling
+=for stopwords Möbius Deléglise Bézout gcdext vecsum vecprod moebius totient liouville znorder znprimroot bernfrac stirling lucasu lucasv OpenPFGW gmpy2
 
 =head1 NAME
 
@@ -176,7 +177,7 @@ Math::Prime::Util::GMP - Utilities related to prime numbers and factoring, using
 
 =head1 VERSION
 
-Version 0.28
+Version 0.29
 
 
 =head1 SYNOPSIS
@@ -648,6 +649,30 @@ An array reference is returned (with large lists this is much faster and uses
 less memory than returning an array directly).
 
 
+=head2 sieve_primes
+
+  my @primes = sieve_primes(2**100, 2**100 + 10000);
+  my @candidates = sieve_primes(2**1000, 2**1000 + 10000, 40000);
+
+Given two arguments C<low> and C<high>, this returns the primes in the
+interval (inclusive).  It is somewhat similar to L<primes> in this regard,
+although it must have two arguments and returns a list rather than a reference.
+Additionally, the method will always be that of a partial-sieve followed
+by primality test.
+
+With three arguments C<low>, C<high>, and C<limit>, this does a partial
+sieve over the inclusive range and returns the list that pass the sieve.
+If C<limit> is less than C<2> then it is identical to the two-argument
+version, in that a primality test will be performed after sieving.
+Otherwise, sieving is performed up to C<limit>.
+
+The two-argument version is typically only used internally and adds little
+functionality.  The three-argument version is quite useful for applications
+that want to apply their own primality or other tests, and wish to have a
+list of values in the range with no small factors.  This is quite common
+for applications involving prime gaps.
+
+
 =head2 next_prime
 
   $n = next_prime($n);
@@ -671,6 +696,29 @@ that is less than the input number).
 The function L</is_prob_prime> is used to determine when a prime is found,
 hence the result is a probable prime (using BPSW).
 
+
+=head2 lucasu
+
+  say "Fibonacci($_) = ", lucasu(1,-1,$_) for 0..100;
+
+Given integers C<P>, C<Q>, and the non-negative integer C<k>,
+computes C<U_k> for the Lucas sequence defined by C<P>,C<Q>.  These include
+the Fibonacci numbers (C<1,-1>), the Pell numbers (C<2,-1>), the Jacobsthal
+numbers (C<1,-2>), the Mersenne numbers (C<3,2>), and more.
+
+This corresponds to OpenPFGW's C<lucasU> function and gmpy2's C<lucasu>
+function.
+
+=head2 lucasv
+
+  say "Lucas($_) = ", lucasv(1,-1,$_) for 0..100;
+
+Given integers C<P>, C<Q>, and the non-negative integer C<k>,
+computes C<V_k> for the Lucas sequence defined by C<P>,C<Q>.  These include
+the Lucas numbers (C<1,-1>).
+
+This corresponds to OpenPFGW's C<lucasV> function and gmpy2's C<lucasv>
+function.
 
 =head2 lucas_sequence
 

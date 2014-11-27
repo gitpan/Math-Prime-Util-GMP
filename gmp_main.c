@@ -256,10 +256,63 @@ void _GMP_lucas_seq(mpz_t U, mpz_t V, mpz_t n, IV P, IV Q, mpz_t k,
   mpz_mod(V, V, n);
 }
 
+void lucasuv(mpz_t Uh, mpz_t Vl, IV P, IV Q, mpz_t k)
+{
+  mpz_t Vh, Ql, Qh, t;
+  int j, s, n;
+
+  if (mpz_sgn(k) <= 0) {
+    mpz_set_ui(Uh, 0);
+    mpz_set_ui(Vl, 2);
+    return;
+  }
+
+  mpz_set_ui(Uh, 1);
+  mpz_set_ui(Vl, 2);
+  mpz_init_set_si(Vh,P);
+  mpz_init(t);
+
+  s = mpz_scan1(k, 0);     /* number of zero bits at the end */
+  n = mpz_sizeinbase(k,2);
+
+  /* It is tempting to try to pull out the various Q operations when Q=1 or
+   * Q=-1.  This doesn't lead to any immediate savings.  Don't bother unless
+   * there is a way to reduce the actual operations involving U and V. */
+  mpz_init_set_ui(Ql,1);
+  mpz_init_set_ui(Qh,1);
+
+  for (j = n; j > s; j--) {
+    mpz_mul(Ql, Ql, Qh);
+    if (mpz_tstbit(k, j)) {
+      mpz_mul_si(Qh, Ql, Q);
+      mpz_mul(Uh, Uh, Vh);
+      mpz_mul_si(t, Ql, P);  mpz_mul(Vl, Vl, Vh); mpz_sub(Vl, Vl, t);
+      mpz_mul(Vh, Vh, Vh); mpz_sub(Vh, Vh, Qh); mpz_sub(Vh, Vh, Qh);
+    } else {
+      mpz_set(Qh, Ql);
+      mpz_mul(Uh, Uh, Vl);  mpz_sub(Uh, Uh, Ql);
+      mpz_mul_si(t, Ql, P);  mpz_mul(Vh, Vh, Vl); mpz_sub(Vh, Vh, t);
+      mpz_mul(Vl, Vl, Vl);  mpz_sub(Vl, Vl, Ql);  mpz_sub(Vl, Vl, Ql);
+    }
+  }
+  mpz_mul(Ql, Ql, Qh);
+  mpz_mul_si(Qh, Ql, Q);
+  mpz_mul(Uh, Uh, Vl);  mpz_sub(Uh, Uh, Ql);
+  mpz_mul_si(t, Ql, P);  mpz_mul(Vl, Vl, Vh);  mpz_sub(Vl, Vl, t);
+  mpz_mul(Ql, Ql, Qh);
+  mpz_clear(Qh);  mpz_clear(t);  mpz_clear(Vh);
+  for (j = 0; j < s; j++) {
+    mpz_mul(Uh, Uh, Vl);
+    mpz_mul(Vl, Vl, Vl);  mpz_sub(Vl, Vl, Ql);  mpz_sub(Vl, Vl, Ql);
+    mpz_mul(Ql, Ql, Ql);
+  }
+  mpz_clear(Ql);
+}
+
 int lucas_lehmer(UV p)
 {
   UV k, tlim;
-  int res;
+  int res, pbits;
   mpz_t V, mp, t;
 
   if (p == 2) return 1;
@@ -270,24 +323,40 @@ int lucas_lehmer(UV p)
     { mpz_clear(t); return 0; }
   if (p < 23)
     { mpz_clear(t); return (p != 11); }
+
+  pbits = mpz_sizeinbase(t,2);
+  mpz_init(mp);
+  mpz_setbit(mp, p);
+  mpz_sub_ui(mp, mp, 1);
+
   /* If p=3 mod 4 and p,2p+1 both prime, then 2p+1 | 2^p-1.  Cheap test. */
   if (p > 3 && p % 4 == 3) {
     mpz_mul_ui(t, t, 2);
     mpz_add_ui(t, t, 1);
-    if (_GMP_is_prob_prime(t))
-      { mpz_clear(t); return 0; }
+    if (_GMP_is_prob_prime(t) && mpz_divisible_p(mp, t))
+      { mpz_clear(mp); mpz_clear(t); return 0; }
   }
-  mpz_init(mp);
-  mpz_setbit(mp, p);
-  mpz_sub_ui(mp, mp, 1);
 
   /* Do a little trial division first.  Saves quite a bit of time. */
   tlim = (p < 1500) ? p/2 : (p < 5000) ? p : 2*p;
   if (tlim > UV_MAX/(2*p)) tlim = UV_MAX/(2*p);
   for (k = 1; k < tlim; k++) {
     UV q = 2*p*k+1;
-    if ((q%8==1 || q%8==7) && mpz_divisible_ui_p(mp, q))
-      { mpz_clear(mp); mpz_clear(t); return 0; }
+    if ( (q%8==1 || q%8==7) &&                 /* factor must be 1 or 7 mod 8 */
+         q % 3 && q % 5 && q % 7 && q % 11 && q % 13) {  /* and must be prime */
+      if (1 && q < (1ULL << (BITS_PER_WORD/2)) ) {
+        UV b = 1, k = pbits;
+        while (k--) {
+          b = (b*b) % q;
+          if (p & (UVCONST(1) << k)) { b *= 2; if (b >= q) b -= q; }
+        }
+        if (b == 1)
+          { mpz_clear(mp); mpz_clear(t); return 0; }
+      } else {
+        if( mpz_divisible_ui_p(mp, q) )
+          { mpz_clear(mp); mpz_clear(t); return 0; }
+      }
+    }
   }
   /* We could do some specialized p+1 factoring here. */
 
@@ -355,6 +424,22 @@ int llr(mpz_t N)
 
 DONE_LLR:
   if (res != -1 && get_verbose_level() > 1) printf("N shown %s with LLR\n", res ? "prime" : "composite");
+  mpz_clear(k); mpz_clear(v);
+  return res;
+}
+static int is_proth_form(mpz_t N)
+{
+  mpz_t v, k;
+  UV n;
+  int res = 0;
+  if (mpz_cmp_ui(N,100) <= 0) return (_GMP_is_prob_prime(N) ? 2 : 0);
+  if (mpz_even_p(N) || mpz_divisible_ui_p(N, 3)) return 0;
+  mpz_init(v); mpz_init(k);
+  mpz_sub_ui(v, N, 1);
+  n = mpz_scan1(v, 0);
+  mpz_tdiv_q_2exp(k, v, n);
+  /* N = k * 2^n + 1 */
+  if (mpz_sizeinbase(k,2) <= n)  res = 1;
   mpz_clear(k); mpz_clear(v);
   return res;
 }
@@ -1048,6 +1133,7 @@ int _GMP_BPSW(mpz_t n)
   return 1;
 }
 
+
 int _GMP_is_prob_prime(mpz_t n)
 {
   /*  Step 1: Look for small divisors.  This is done purely for performance.
@@ -1060,6 +1146,7 @@ int _GMP_is_prob_prime(mpz_t n)
   /*  Step 2: The BPSW test.  spsp base 2 and slpsp. */
   return _GMP_BPSW(n);
 }
+
 
 int _GMP_is_prime(mpz_t n)
 {
@@ -1082,8 +1169,12 @@ int _GMP_is_prime(mpz_t n)
    * composite (and it cannot be if n < 2^64). */
 
   /* For small numbers, try a quick BLS75 n-1 proof. */
-  if (prob_prime == 1 && nbits <= 200)
-    prob_prime = _GMP_primality_bls_nm1(n, 1 /* effort */, 0 /* proof */);
+  if (prob_prime == 1) {
+    if (is_proth_form(n))
+      prob_prime = _GMP_primality_bls_nm1(n, 2 /* effort */, 0 /* cert */);
+    else if (nbits <= 200)
+      prob_prime = _GMP_primality_bls_nm1(n, 1 /* effort */, 0 /* cert */);
+  }
 
   /* If prob_prime is still 1, let's run some extra tests.  We could run
    * a Frobenius test or some random-base M-R tests.  The FU test is
@@ -1130,19 +1221,25 @@ int _GMP_is_prime(mpz_t n)
   return prob_prime;
 }
 
+
 int _GMP_is_provable_prime(mpz_t n, char** prooftext)
 {
-  int prob_prime = _GMP_is_prob_prime(n);
+  int prob_prime = primality_pretest(n);
+  if (prob_prime != 1)  return prob_prime;
 
-  /* Try LLR test if they don't need a proof certificate. */
+  /* Try LLR if they don't need a proof certificate. */
   if (prooftext == 0) {
-    int res = llr(n);
-    if (res == 0 || res == 2) return res;
+    prob_prime = llr(n);
+    if (prob_prime == 0 || prob_prime == 2) return prob_prime;
   }
 
+  /* Start with BPSW */
+  prob_prime = _GMP_BPSW(n);
+  if (prob_prime != 1)  return prob_prime;
+
   /* Run one more M-R test, just in case. */
-  if (prob_prime == 1)
-    prob_prime = _GMP_miller_rabin_random(n, 1, 0);
+  prob_prime = _GMP_miller_rabin_random(n, 1, 0);
+  if (prob_prime != 1)  return prob_prime;
 
   /* We can choose a primality proving algorithm:
    *   AKS    _GMP_is_aks_prime       really slow, don't bother
@@ -1151,15 +1248,15 @@ int _GMP_is_provable_prime(mpz_t n, char** prooftext)
    */
 
   /* Give n-1 a small go */
-  if (prob_prime == 1)
-    prob_prime = _GMP_primality_bls_nm1(n, 2, prooftext);
+  prob_prime = _GMP_primality_bls_nm1(n, is_proth_form(n) ? 3 : 1, prooftext);
+  if (prob_prime != 1)  return prob_prime;
 
   /* ECPP */
-  if (prob_prime == 1)
-    prob_prime = _GMP_ecpp(n, prooftext);
+  prob_prime = _GMP_ecpp(n, prooftext);
 
   return prob_prime;
 }
+
 
 /*****************************************************************************/
 /*          AKS.    This implementation is quite slow, but useful to have.   */
